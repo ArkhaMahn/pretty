@@ -1,0 +1,380 @@
+# Pretty View
+
+### A ZAP 2.17.0 add-on that adds a **Pretty** tab to the HTTP Request and HTTP Response panels — auto-detects the payload format and renders it re-formatted, word-wrapped and syntax-highlighted.
+
+> **Status: alpha.** Reverse-engineered from `pretty.zap` and rebuilt from source.
+
+---
+
+## What it does
+
+The add-on hooks the `RequestAll` / `ResponseAll` HTTP panel components and registers a `Pretty` view
+alongside `Source` / `Header` / `Params`. When a message is selected it:
+
+1. **Splits** headers from body (`MessageSplitter`), so the header block is preserved verbatim.
+2. **Detects** the payload format (`ContentTypeSniffer`) — content type first, then body heuristics.
+3. **Prettifies** the body with the matching `PrettyPrettifier`, off the EDT on a bounded worker pool.
+4. **Renders** the result in an `RSyntaxTextArea` (`CustomPrettyView`) with a per-format syntax scheme
+   and a notice bar that reports format detection, fallback and size decisions.
+
+Supported formats: JSON, HTML, XML, CSS, JavaScript, GraphQL, form-urlencoded, multipart, SQL, CSV,
+plain text.
+
+### Behaviour worth knowing
+
+- **The view opens at the top.** A large response is streamed in as chunks appended at the end of the
+  document, and Swing scrolls to the caret — so the viewport used to be dragged down with every chunk
+  until it sat at the bottom of the prettified response. `ChunkedTextLoader` now freezes the caret's
+  update policy for the duration of a load and calls back after every chunk; `PrettyViewPanel.pinToTop`
+  returns the caret to offset 0 and the scrollbar to 0 each time. Only a genuine gesture — dragging the
+  scrollbar, the mouse wheel, a click in the body, or a keystroke — counts as the user taking over, after
+  which the view is left alone. Watching the caret position or the scrollbar value instead would not work:
+  the loader's own appends move both, so the pin would disable itself on the first chunk.
+  Asserted by `/tmp/opencode/verify/Verify9.java` and `/tmp/opencode/verify/Verify10.java`, the latter
+  driving the real loader rather than a stand-in.
+- **Large payload policy** (`LargePayloadPolicy`) — bodies over `0x500000` chars (5 MB) are rendered
+  verbatim instead of blocking on a long format pass; and a line past `MAX_WORD_WRAP_LINE_CHARS` is wrapped
+  at any character rather than on word boundaries, so a minified single-line payload or a React/Next.js
+  hydration blob cannot make the editor hunt for word breaks that do not exist. Line limits are asked of
+  the split text the editor actually receives, so in practice over-long payloads wrap on word boundaries and
+  keep their highlighting.
+- **Anti-aliasing is always on** (`LargePayloadPolicy.applyForSize`). It used to be disabled past 512 KB,
+  which meant a payload's size changed how its glyphs were drawn, so the same font read as a different one
+  over long responses — rendering the same characters with only that flag set differs pixel for pixel. The
+  cutoff bought nothing measurable and cost that, so it is gone: `applyForSize` now enables anti-aliasing
+  unconditionally and `ANTI_ALIAS_LIMIT_CHARS` is removed. Both overloads set it explicitly rather than
+  relying on the editor default, so an off flag left on a reused component cannot survive a load.
+- **Lines are never left unwrapped** (`LargePayloadPolicy.shouldWrap`). An unwrapped line is not just a
+  line you scroll sideways: long enough, the row becomes far wider than the component, and the editor then
+  fails to paint all of it. On a 138 878-char JSON response whose prettified form holds one 54 332-char
+  line, leaving it unwrapped asked the editor for a preferred width of 543 311 px and that row painted
+  12 581 px of ink against 27 517 px for the same characters wrapped — most of the visible line was simply
+  absent, which is what reads on screen as garbled text. Wrapping is what keeps the preferred width at the
+  viewport's (611 px here) and paints every character.
+- **Wrapping is switched off while a body streams in and put back when it finishes**
+  (`ChunkedTextLoader.load`). With wrapping on, every chunk re-wraps the whole line it lands on, so wrapping
+  is expensive on a single very long line: a 652 KB single-line load measured ~3.5 s wrapped against
+  ~220 ms unwrapped. One wrap pass at the end replaces one per chunk. The visible trade is that a body which
+  is still arriving is briefly unwrapped.
+- **Over-long lines are shown in 2 000-character pieces** (`DisplayLineSplitter.CHUNK_CHARS`). Wrapping
+  alone is not enough to keep scrolling smooth, because the editor wraps by handing the whole logical line
+  to a layout view and redoing that work on every repaint. One 54 331-char line in the 118 871-char
+  prettified response above cost **17 ms median and 70 ms p95 per repaint** at 18 pt, which is the stutter
+  felt while scrolling up and down. The identical characters handed to the editor as 2 000-char lines
+  repaint in **6 ms median and 21 ms p95**. The seam between pieces shows in the editor but not in the
+  payload: every copy hands back the characters as the response holds them, and an edited body is written
+  back to the message in its original form rather than with the seams in it. Chunk size was measured, not
+  guessed: 1 000 chars gave 7 ms/20 ms, 2 000 gave 5-6 ms/14-21 ms, 4 000 gave 8 ms/19 ms.
+- **The font is ZAP's, not a hardcoded one** (`EditorTheme.configuredFont`). The editor, its gutter and its
+  overview ruler all use the font ZAP is configured to use for work panels — the one set under *Configure
+  Fonts* — falling back to ZAP's own default font when the user has not set one. This is the same lookup
+  ZAP makes for its own syntax highlighted text area, including the font-family fallback for a family that
+  is not installed on the machine. It is re-read on `updateUI`, so a font changed in ZAP is picked up
+  without rebuilding the panel. Outside a running ZAP, ZAP's font map is never populated and every lookup
+  throws, so the code falls back to a monospaced font at 18pt rather than letting the panel fail to open.
+- **Syntax highlighting survives an over-long line** (`LargePayloadPolicy.syntaxStyleFor`). Highlighting
+  used to be dropped for a payload with a pathologically long line, because the editor re-tokenizes the
+  whole logical line that a painted row belongs to, so repaint cost is set by the *longest line* rather
+  than by the part of it on screen: a 118 871-char prettified JSON response holding one 54 332-char line
+  repainted in 132 ms median against a 16 ms frame. That was measured before lines were being split for
+  display, and it no longer applies, because the editor is now handed 2 000-char pieces and never holds the
+  54 332-char line at all. The style is therefore decided from the text the editor actually receives
+  (`split.displayText()`) rather than from the formatted text: judging the formatted text would read a long
+  line off a document that no longer contains one and strip the colours off a payload that is entirely
+  highlightable. Restoring it costs nothing measurable — 3-5 ms median and 7-9 ms p95 per repaint over 60
+  scroll positions with `text/json` on, against 10 ms/23 ms for the same text unhighlighted on the same
+  machine, which is inside the noise. The 132 ms figure above is why the limit still exists for text that
+  reaches the editor unsplit. Anti-aliasing was never the culprit either: turning it off moved the 132 ms
+  median only to 122 ms, which is why it is now simply always on.
+- **Size limits are asked of the payload, line limits of the displayed text** (`LargePayloadPolicy`). The
+  two answer different questions, so they read different texts. A character limit — unhighlighted text past
+  `SYNTAX_OFF_LIMIT_CHARS` (5 MiB) — asks how big the payload is, so it is asked of the formatted text. The
+  line limits — wrapping style and `MAX_SYNTAX_LINE_CHARS` — ask what the editor has to lay out and tokenize,
+  so they are asked of the split text, which is the only text the editor holds. Asking a size limit of the
+  split text would credit the seams to the payload: on the response above the split text is 118 927
+  characters against a formatted 118 871, which is enough to flip a payload that sat within 56 characters of
+  a limit. This distinction only matters because the seams exist; anti-aliasing, which had a character limit
+  of its own until it was removed, was judged on the formatted text throughout.
+  (`PrettyDefaultViewSelector`). ZAP sorts its default view selectors by order ascending and opens the first
+  one that matches, so the position matters: ZAP ships an image selector at 20 and large request and
+  response selectors at 50, and this one sits at 30. That is above the image selector, so an image response
+  still opens in the image view instead of being prettified as if it were text, and below the large body
+  selectors, so Pretty wins for an ordinary payload no matter how big. Asserted by
+  `/tmp/opencode/verify/Selector.java`.
+- **A body past the prettify threshold switches to the text view** (`PrettyDefaultViewSelector`). Past
+  `PrettifyThreshold`'s 5 MB the add-on stops prettifying and hands the body back verbatim, so there is
+  nothing left for it to offer and the selector declines the message instead; ZAP's own large body selector
+  then matches and the panel opens in its plain text view. The selector and the prettifier are held to the
+  same boundary, so Pretty is the default exactly when it has something to prettify — a body of exactly
+  5 MB still prettifies and still opens in Pretty, and one byte more does not.
+- **Chunked loading** (`ChunkedTextLoader`) keeps the notice bar responsive while the document streams in.
+- **Write-back** (`PrettyWriteBack`) pushes edits made in the Pretty tab back to the underlying message.
+- **Fail-open everywhere** — every prettifier failure is caught and the raw body is shown instead;
+  detection and formatting never block the panel.
+- **Two-space indentation** — every prettifier emits two spaces per level, and never a tab. The unit
+  is `PrettyPrettifier.INDENT` (`"  "`), with `PrettyPrettifier.INDENT_WIDTH` for the two backends that
+  want a column count instead of a string; change that one constant to restyle every format. JSON is
+  the exception: `Gson`'s pretty printer hardcodes two spaces and exposes no indent setting.
+- **One True Brace Style (1TBS)** — the opening brace of a block stays on the line that introduces it,
+  and only its body moves down a level: `if (a) {` / `  b()` / `}`. The closing brace realigns to the
+  start of the statement that opened the block. This holds in JavaScript, CSS and GraphQL alike, so
+  `body {`, `@media (max-width: 600px) {`, `query Q {` and `hero(id: $id) {` all read the same way.
+  A brace that opens an *expression* rather than a block is part of that expression and stays
+  attached to it, which is what keeps `return {x:1}`, `var o={a:1}` and `()=>({a:1})` intact. A brace
+  with nothing to attach to — a bare block, or the body of a `case` label — opens its own line.
+  `(` and `[` keep their trailing position. Embedded `<script>` / `<style>` code inherits the rule, so
+  braces stay consistent no matter which format they arrive in. SQL, XML, HTML, JSON, CSV, form and
+  multipart payloads have no braces and are unaffected.
+- **Spacing inside brackets is left alone.** The prettifiers add line breaks, indentation and the
+  1TBS brace, but they do not insert spaces around `=`, `=>` or `:` in code, so `var o={a:1}` and
+  `episode:JEDI` stay as written. Rewriting token spacing needs a real parser and is deliberately out
+  of scope.
+- **Embedded HTML code is nested** — a multi-line `<script>` or `<style>` body is moved onto its own
+  lines, indented one level in from its opening tag, with the closing tag realigned to match it; the
+  body's own relative indentation is preserved. Single-line bodies stay inline, `<script src>` is never
+  rewritten, and the whitespace inside `<pre>`, `<textarea>` and `<template>` is passed through
+  byte-for-byte because jsoup prints raw-text nodes verbatim and would otherwise strand them at
+  column 0.
+
+---
+
+## Project structure
+
+Sources were recovered from the compiled add-on and keep the original package layout:
+
+```
+Pretty/
+├── ZapAddOn.xml                     add-on manifest (name, version, status, bundle, extensions)
+├── build.gradle.kts                 Gradle build (org.zaproxy.add-on 0.13.1)
+├── settings.gradle.kts
+├── build.sh                         javac + zip build against ZAP 2.17.0
+├── lib/
+│   ├── jsoup-1.17.2.jar             vendored, shaded into the .zap (HTML parsing)
+│   └── gson-2.11.0.jar              vendored, shaded into the .zap (JSON / GraphQL)
+└── src/main/
+    ├── java/org/zaproxy/zap/extension/prettyview/
+    │   ├── ExtensionPrettyView.java     extension entry point, view registration + unload
+    │   ├── async/                        PrettyWorker, PrettyWorkerTask, ExecutorHolder
+    │   ├── detect/                       ContentTypeSniffer, MessageSplitter, PayloadFormat
+    │   ├── formatters/                   PrettyPrettifier + 11 implementations + manager
+    │   ├── ui/                           CustomPrettyView, Panel, Model, NoticeBar, theme, sizing
+    │   └── view/                         default view selectors
+    └── resources/org/zaproxy/zap/extension/prettyview/resources/
+        └── Messages.properties           i18n bundle, prefix `prettyview`
+```
+
+### Package map
+
+| Package | Responsibility |
+| --- | --- |
+| `prettyview` | `ExtensionPrettyView` — registers the Pretty view and default view selectors on `RequestAll` / `ResponseAll`, and removes them cleanly on unload. |
+| `prettyview.detect` | `MessageSplitter` (headers vs body), `PayloadFormat` enum, `ContentTypeSniffer` (content-type then body sniffing). |
+| `prettyview.formatters` | `UniversalPrettifierManager` (registry + threshold + fail-open), `PrettyResult` (text / format / fallback / note / overThreshold), and one `PrettyPrettifier` per format. |
+| `prettyview.async` | `PrettyWorker` bounded executor + `PrettyWorkerTask`, `ExecutorHolder` lazy init. |
+| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `LargePayloadPolicy`. |
+| `prettyview.view` | `PrettyDefaultViewSelector` + factory — when the Pretty view should become the default. |
+
+---
+
+## Build
+
+```bash
+./build.sh
+```
+
+Compiles against `/opt/ZAP_2.17.0`, shades jsoup and gson into the add-on, and packages
+`build/dist/prettyview-alpha-1.0.0.zap`.
+
+Install: **ZAP GUI → Manage Add-ons → Install local add-on (.zap file)**
+
+Gradle is also configured (`org.zaproxy.add-on` 0.13.1, Java 17, ZAP 2.17.0) if you prefer
+`gradle addOn` / `gradle copyZapAddOn`.
+
+---
+
+## Provenance
+
+This tree was reconstructed from the packaged add-on `pretty.zap`:
+
+- The add-on's own classes (`org/zaproxy/zap/extension/prettyview/**`, 44 class files across 35
+  source files) were decompiled with **CFR 0.152** against the ZAP 2.17.0 classpath, keeping the
+  original package structure.
+- `ZapAddOn.xml` and `Messages.properties` were extracted verbatim.
+- The bundled third-party libraries (`org/jsoup/**` 275 classes, `com/google/gson/**` 223 classes)
+  were recovered as the exact vendored versions the add-on shipped with — jsoup **1.17.2** and
+  Gson **2.11.0**, both shaded into the packaged add-on as before.
+
+### Fidelity
+
+- Recompiled from source, **27 of 44** classes are byte-identical to the original.
+- The remaining 17 differ only in branch polarity, local-slot allocation and exception-table order —
+  the expected artifacts of a decompile/recompile round trip, not logic changes.
+- Behavioural check: both the original `.zap` classes and the rebuilt classes were run through
+  `UniversalPrettifierManager` over 25 payloads (one per format plus header-only, empty, binary,
+  deep-nesting, GraphQL, multipart and embedded-HTML cases). Output — detected format, resulting text,
+  fallback / note / over-threshold flags — was **identical in every case** on the first pass, before
+  the intentional restyle described under *Two-space indentation* and *Embedded HTML code is nested*.
+  Re-checked after it, the two builds now differ **only in whitespace**: comparing the output with all
+  whitespace stripped yields byte-identical results on all 25 payloads, so no character was added,
+  dropped or reordered.
+- Edge cases for the embedded-block indentation are asserted in `/tmp/opencode/verify/Verify3.java`:
+  single-line bodies stay inline, `<script src>` is untouched, `<pre>` / `<textarea>` keep their tabs
+  and trailing spaces, and every closing tag lands back on its opening tag's column. Note that jsoup
+  re-serialises `<template>` children (collapsing their whitespace); the original add-on does exactly
+  the same, so that is preserved rather than corrected.
+- 1TBS is asserted by `/tmp/opencode/verify/Verify8.java` (54 checks): the brace attaches for JS
+  `if` / `else` / `else if`, `for`, `while`, `do`, `switch`, `try` / `catch` / `finally`, function
+  declarations, classes and methods, async arrows and blocks nested inside a `case` body; it also
+  covers CSS type, pseudo-class, pseudo-element, functional, attribute and nested selectors, at-rules
+  and at-rule nesting, and GraphQL operations, arguments, fields, mutations, fragments and anonymous
+  operations. A companion sweep asserts that no block brace is ever left alone on its line. The
+  closing-brace alignment and column invariants for all three formats are checked by
+  `/tmp/opencode/verify/Verify4.java`.
+- Restyling never changes content: comparing the new output with all whitespace stripped is
+  byte-identical to the original `.zap` across all 25 payloads.
+- `/tmp/opencode/verify/Verify5.java` (133 checks) is the regression suite for the five defects listed
+  below, and `/tmp/opencode/verify/Edge.java` diffs the rebuilt formatter against `pretty.zap` over
+  keyword lookalikes (`{case:1}`, `{default:2}`, `export default {…}`, `export {a,b}`,
+  `import {a} from "m"`, `case {a:1}:`), async arrows, ternaries, template literals, classes and
+  dynamic `import()` — content is preserved in every case.
+
+### Pre-existing defects from the original add-on, now fixed
+
+These all reproduce identically in `pretty.zap`. They were listed here as known quirks until the
+1TBS work, which made them easy to spot; they are now corrected:
+
+- **`switch` labels were mangled.** The formatter broke the line straight after a keyword, so
+  `switch (a) { case 1: b(); … }` emitted `case` and `1:b();` on separate lines and split `default:`
+  the same way. `case` / `default` are now recognised before the flush and their values and bodies
+  stay put, including fallthrough, `case X: {…}` and blocks nested inside a case body.
+- **Object literals were treated as blocks.** `return {x:1}` and `var o = {a:1}` put the `{` on its
+  own line and stranded the closing brace. A brace now opens a *block* only when it really does;
+  literal braces stay attached to their expression and their contents indent one level, so nested
+  literals, literals in arrays and literals as call arguments all read correctly. Arrow function
+  bodies after `=>` remain blocks.
+- **Anonymous GraphQL operations threw.** A payload starting with `{` was always routed to the JSON
+  envelope parser, so `{hero{id}}` failed with `PrettificationException`. The parser now tries the
+  envelope first and only treats the payload as an operation when there is no `query` member, which
+  keeps the envelope, batched-array and plain-JSON paths working.
+- **Loop-header detection was inert.** `lastWord` was cleared inside `handleCode` before the main loop
+  tested it against `LOOP_KEYWORDS`, so `loopParenBase` was never set and `for (;;)` / `while (…)`
+  headers were split after every `;`. The keyword is now captured first and the paren depth is
+  released when the header closes, so later statements still end their lines.
+- **CSS pseudo-selectors were corrupted.** Every colon got a trailing space, so `b:hover` came out as
+  `b: hover` and `b::before` as `b:: before` — both invalid CSS. A colon now takes a space only where
+  CSS wants one: in a declaration (detected by brace depth plus the property name being a bare
+  identifier) and in an at-rule or function argument such as `@media (max-width:600px)`. In a
+  selector nothing is added, so `:root`, `a:not(.x)`, `input[type="text"]:focus` and nested `&:hover`
+  all stay valid.
+- **Brace style was Allman, not 1TBS.** `pretty.zap` puts the opening brace of a block on its own
+  line, so `if (a) {b()}` rendered as `if(a)` / `{` / `b()`, and `a.map(function(x){…})` split the
+  brace away from the parameter list it belongs to. Every block brace is now attached to the line
+  that introduces it, and the closing brace realigns to the start of that statement. A brace with
+  nothing to attach to — a bare block, or a `case` body — still opens its own line. This was applied
+  to JavaScript, CSS and GraphQL together so the claim is true of all three.
+  See [1TBS](#behaviour-worth-knowing).
+- **The view scrolled to the bottom of large responses.** Opening a request or response with a large
+  content length left the viewport scrolled to the end of the prettified body instead of the start. A
+  large payload is loaded in chunks appended at the end of the document, and `DefaultCaret` follows
+  insertions at its own position, so the caret — and therefore the viewport — tracked the growing end of
+  the document and finished at the bottom. `pretty.zap` has the same behaviour and no caret handling at
+  all. See [The view opens at the top](#behaviour-worth-knowing).
+- **JavaScript was routinely misdetected.** With no `Content-Type`, or a generic one such as
+  `application/octet-stream`, `function f(a,b){return {x:a}}`, `if(a){b()}else{c()}` and
+  `for(var i=0;i<9;i++){f(i)}` all came back as `GRAPHQL`, and `var cfg={a:1,b:{c:2}}` came back as
+  `CSS`. The cause was `GRAPHQL_START`'s shorthand alternative matching any `{` followed by a word
+  and then `(` or `{` — which is precisely the body of a JavaScript block — combined with a broad
+  `CSS_BLOCK`. Detection now recognises JavaScript from a keyword or `=>` found after comments and
+  string literals are stripped, and only treats `{hero{id}}` as GraphQL once that has been ruled out.
+  See [Detection order](#detection-order).
+- **Vendor and custom JavaScript types were unrecognised**, so anything outside the hard-coded list
+  fell through to plain text even when the body was plainly a script. Matching is now on the subtype.
+  See [JavaScript content types](#javascript-content-types).
+
+The 1TBS change also fixed one genuine defect as a side effect: `CssPrettifier` used to flush the
+selector line *after* incrementing the indent, so every nesting level drifted one step too deep and
+`@media` blocks came out four levels in.
+
+### JavaScript content types
+
+`PayloadFormat.JAVASCRIPT` lists the types seen in the wild — `application/javascript`,
+`text/javascript`, `application/x-javascript`, `text/x-javascript`, `application/ecmascript`,
+`text/ecmascript`, `application/x-ecmascript` and `module`. Beyond that list,
+`ContentTypeSniffer.isJavaScriptMediaType` matches on the **subtype**, so vendor and custom types work
+without being added to the enum:
+
+| matches | does not match |
+|---|---|
+| `application/javascript1.5`, `application/x-js`, `text/js` | `application/json`, `application/xhtml+xml` |
+| `application/vnd.acme.javascript`, `application/vnd.zoo.js` | `text/css`, `application/xml` |
+| `application/ld+javascript`, `application/x-my-custom-javascript` | `application/octet-stream` |
+| `text/ecmascript` and any `*ecmascript*` | |
+
+Matching is on the substring `javascript` / `ecmascript`, or a trailing `js` token separated by
+`-`, `.` or `+`. The media type is lowercased and stripped of `;charset=…` first, so
+`APPLICATION/X-JAVASCRIPT; charset=utf-8` resolves correctly.
+
+### Detection order
+
+`ContentTypeSniffer.fromBody` runs in this order, and each step exists because the one before it
+would otherwise claim the body:
+
+1. **HTML** — an allowlist of tags, so it cannot be confused with a script.
+2. **GraphQL with an explicit keyword** — `query` / `mutation` / `subscription` / `fragment`, with an
+   optional name so `mutation { … }` counts. Checked first because a field can legitimately be named
+   `new`, `for` or `in`, which the JavaScript signature would otherwise key on.
+3. **JavaScript** — a keyword or `=>` found *after* comments and string literals are removed, so
+   `a::before{content:"new"}` and `/* use var here */a{color:red}` are not read as scripts. Ahead of
+   the GraphQL shorthand because `{b()}` — the body of a JavaScript block — looks exactly like a
+   selection set.
+4. **GraphQL shorthand** — `{hero{id}}`, anchored to the start of the body.
+5. **JSON**, **XML**, **JSONP**, **SQL**, **form-urlencoded**, **CSS**, **Markdown**, plain text.
+
+`in` and `of` were dropped from the keyword list and a preceding `-` is excluded, because CSS values
+such as `ease-in-out` and `ease-in` otherwise matched.
+
+### Binary payloads
+
+A body of bytes is shown verbatim, never passed to a text formatter. Two checks in
+`ContentTypeSniffer.detect` run before both the header and the body heuristics:
+
+1. **An unambiguous binary content type wins.** `application/x-protobuf`, `application/protobuf`,
+   `application/proto`, `application/x-google-protobuf`, `application/google-protobuf`, the
+   `application/grpc*` family, `application/pdf`, the archive and compression types,
+   `application/wasm`, plus every `image/*`, `audio/*`, `video/*` and `font/*` top-level type
+   resolve to plain text.
+2. **Bytes that cannot occur in text.** `looksBinary` scans the same 8192-character window every
+   other signal uses and reports a NUL or any C0 control byte other than tab, newline and carriage
+   return, which is what protobuf length prefixes such as `0x08`, `0x12` and `0x18` are made of.
+
+`application/octet-stream` is deliberately **not** in that list. It is a generic catch-all that
+servers also use for scripts, so it stays body-sniffable and a script served as
+`application/octet-stream` is still detected as JavaScript.
+
+This was a real corruption bug. A Google RPC request to
+`$rpc/google.internal.onegoogle.asyncdata.v1.AsyncDataService/GetAsyncData` is served as
+`application/x-protobuf`; that type matched no formatter, so the body fell through to sniffing,
+matched the form-urlencoded heuristic (`=`, `&`, no spaces) and was then **URL-decoded**:
+`a%20b` became `a b`, `+` became a space, `e%26f` became `e&f`, and `raw:` lines were interleaved —
+126 bytes of input rendered as 179 bytes of different text. Binary payloads are now detected and
+passed through unchanged.
+
+### Known limitations
+
+- **Minified input is handled** for JS, CSS and HTML: the formatters are character-driven rather than
+  line-driven, so a single-line payload such as
+  `for(var i=0;i<10;i++){if(i%2){f()}else{g()}}` or `body{margin:0}a{color:red}` expands correctly.
+- **Sniffing without a `Content-Type` header is a heuristic**, and a declaration normally wins over it,
+  so a mis-declared or generic type (`application/octet-stream`, `text/plain`) still resolves
+  correctly from the body. The exception is an unambiguous binary declaration, which is honoured so
+  that binary is never read as text; see [Binary payloads](#binary-payloads). A bare object literal
+  with no JavaScript keyword, such as `{a:1}`, has no signal to key on and falls back to JSON.
+- **HTML is re-serialised by jsoup**, which lowercases `<!DOCTYPE html>` to `<!doctype html>`, inserts
+  an empty `<head></head>`, and collapses whitespace inside `<template>`. Nothing is lost and the
+  original add-on does the same, so this is preserved rather than corrected.
+- **A bare token under `application/json` gains quotes.** `c8b03804-0909-…` is not valid JSON, but
+  gson's lenient reader accepts it as a string and prints `"c8b03804-0909-…"`, so two characters are
+  added. This is the one place a payload can gain characters rather than only whitespace.
+- Two generics artifacts in `HtmlPrettifier` were repaired by hand (raw `ArrayList`/`List` locals
+  around `document.select(...)` and `element.dataNodes()`), restoring the intended `Element` /
+  `DataNode` typing and dropping one redundant collection copy.
