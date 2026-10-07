@@ -111,12 +111,18 @@ plain text.
 - **Write-back** (`PrettyWriteBack`) pushes edits made in the Pretty tab back to the underlying message.
 - **Fail-open everywhere** — every prettifier failure is caught and the raw body is shown instead;
   detection and formatting never block the panel.
-- **Two-space indentation** — every prettifier emits two spaces per level, and never a tab. The unit
-  is `PrettyPrettifier.INDENT` (`"  "`), with `PrettyPrettifier.INDENT_WIDTH` for the two backends that
-  want a column count instead of a string; change that one constant to restyle every format. JSON is
-  the exception: `Gson`'s pretty printer hardcodes two spaces and exposes no indent setting.
+- **Four-space indentation** — every prettifier emits four spaces per level, and never a tab. The unit
+  is `PrettyPrettifier.INDENT` (`"    "`), with `PrettyPrettifier.INDENT_WIDTH` for the backends that
+  want a column count instead of a string; change that one constant to restyle every format. Four is
+  also what the two backends that indent on their own already use by default — jsoup's `indentAmount`
+  and Xalan's `indent-amount` are both 4 — so the constant now leaves them at their own default instead
+  of overriding it. JSON used to be the exception, because `Gson`'s `setPrettyPrinting` hardcodes two
+  spaces and exposes no setting; `JsonPrettifier` now serialises through a `JsonWriter` carrying
+  `PrettyPrettifier.INDENT`, and `Gson.toJson(JsonElement, JsonWriter)` copies its own `htmlSafe` and
+  `serializeNulls` flags onto that writer without touching the indent, so JSON follows the same constant
+  as everything else.
 - **One True Brace Style (1TBS)** — the opening brace of a block stays on the line that introduces it,
-  and only its body moves down a level: `if (a) {` / `  b()` / `}`. The closing brace realigns to the
+  and only its body moves down a level: `if (a) {` / `    b()` / `}`. The closing brace realigns to the
   start of the statement that opened the block. This holds in JavaScript, CSS and GraphQL alike, so
   `body {`, `@media (max-width: 600px) {`, `query Q {` and `hero(id: $id) {` all read the same way.
   A brace that opens an *expression* rather than a block is part of that expression and stays
@@ -213,7 +219,7 @@ This tree was reconstructed from the packaged add-on `pretty.zap`:
   `UniversalPrettifierManager` over 25 payloads (one per format plus header-only, empty, binary,
   deep-nesting, GraphQL, multipart and embedded-HTML cases). Output — detected format, resulting text,
   fallback / note / over-threshold flags — was **identical in every case** on the first pass, before
-  the intentional restyle described under *Two-space indentation* and *Embedded HTML code is nested*.
+  the intentional restyle described under *Four-space indentation* and *Embedded HTML code is nested*.
   Re-checked after it, the two builds now differ **only in whitespace**: comparing the output with all
   whitespace stripped yields byte-identical results on all 25 payloads, so no character was added,
   dropped or reordered.
