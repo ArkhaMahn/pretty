@@ -51,11 +51,43 @@ plain text.
   12 581 px of ink against 27 517 px for the same characters wrapped — most of the visible line was simply
   absent, which is what reads on screen as garbled text. Wrapping is what keeps the preferred width at the
   viewport's (611 px here) and paints every character.
-- **Wrapping is switched off while a body streams in and put back when it finishes**
-  (`ChunkedTextLoader.load`). With wrapping on, every chunk re-wraps the whole line it lands on, so wrapping
-  is expensive on a single very long line: a 652 KB single-line load measured ~3.5 s wrapped against
-  ~220 ms unwrapped. One wrap pass at the end replaces one per chunk. The visible trade is that a body which
-  is still arriving is briefly unwrapped.
+- **Wrapping is never touched while a body streams in** (`ChunkedTextLoader.load`). It used to be switched
+  off for the duration and put back when the load finished, to save re-laying out the line every chunk
+  lands on; that trade has been dropped because the editor no longer sees long logical lines. The text is
+  handed over already broken into display lines no longer than `DisplayLineSplitter.MAX_CHUNK_CHARS`, so a
+  landing chunk only re-wraps the short line it ends in and the saving is no longer there to be had.
+  Turning wrapping back on at the end, meanwhile, re-flowed the whole document in one visible jump exactly
+  as loading finished — the payload looked one way while it arrived and another once it stopped. Leaving
+  wrapping alone means the body is drawn the same from the first chunk to the last.
+- **The editor follows ZAP's light/dark look and feel** (`EditorTheme.palette`, `PrettySyntaxScheme`). The
+  panel used to be hardwired to a dark palette, so in a light ZAP the editor was a dark rectangle inside a
+  white window, and its token colours were chosen against the wrong background. The palette is now read
+  from `DisplayUtils.isDarkLookAndFeel()` each time the panel is themed, and the token colours move with
+  it: bright cyan/tan/violet on dark, the deeper blue/maroon/green of a printed page on light, with the
+  plain-text colour taken from the palette so it stays legible either way. It is re-read on `updateUI`, so
+  switching ZAP's theme restyles the open editor without rebuilding the panel.
+- **The wheel and the arrow keys move the view by a line** (`PrettyViewPanel.installScrolling`). Swing's
+  default unit increment for a scroll pane comes from the view and can be a handful of pixels on a text
+  area, which reads as a wheel that barely moves the text. The scroll bars are given a unit increment of
+  one row — taken from the editor's own font metrics, so it follows a font change — a block increment of a
+  viewport less a row, and FlatLaf's `"JScrollPane.smoothScrolling"` client property so a notch on a
+  trackpad glides instead of jumping. The block increment is recomputed when the viewport is resized.
+- **A malformed token no longer reads as a quoted one** (`PrettySyntaxScheme`, `SyntaxStyleMapper`). The
+  tokenizer's two error types, `ERROR_IDENTIFIER` and `ERROR_NUMBER_FORMAT`, used to be painted in the
+  string colour because they fell through to the same bucket, which made a value the language could not
+  place look like a correctly quoted string; they now have a red of their own, while the *unterminated*
+  string tokens stay in the string colour because for a string continued onto the next display line that
+  is exactly what they are. Multipart bodies also stop being plain text: their header block is highlighted
+  as a properties file, which is the closest match the tokenizer set has for `Name: value` lines.
+- **The message can be searched in place** (`PrettySearchBar`, `PrettyViewPanel` context menu). Ctrl+F
+  opens a find bar above the editor — pre-filled from the selection — with match-case, whole-word and
+  regular-expression toggles, a live match count, and prev/next buttons; Enter and Shift+Enter walk the
+  matches and Escape or the close button puts the bar away and clears its highlights. The same search is
+  on the editor's right-click menu, alongside Undo / Redo / Cut / Copy / Paste / Delete / Select All, which
+  the menu takes from the editor's own action map and rebuilds each time it opens, so its Copy is the
+  split-aware copy the Pretty view installs rather than RSTA's default. ZAP's request and response views
+  put their search where the message is, so this is the same idea brought into the Pretty view, and it is
+  backed by RSTA's own `SearchEngine` rather than a second implementation.
 - **Over-long lines are broken at 2 000-character boundaries, held back to 4 000 while a string or a
   comment is open** (`DisplayLineSplitter.copyChunked`). Wrapping alone is not enough to keep scrolling
   smooth, because the editor wraps by handing the whole logical line to a layout view and redoing that
@@ -79,6 +111,9 @@ plain text.
   is not installed on the machine. It is re-read on `updateUI`, so a font changed in ZAP is picked up
   without rebuilding the panel. Outside a running ZAP, ZAP's font map is never populated and every lookup
   throws, so the code falls back to a monospaced font at 18pt rather than letting the panel fail to open.
+  `LargePayloadPolicy.applyBaseline` also enables fractional font metrics here: a monospaced glyph is not a
+  whole number of pixels wide, and RSTA only turns fractional measurement on by itself on some platforms,
+  so asking for it makes the same text space the same everywhere.
 - **Syntax highlighting survives an over-long line** (`LargePayloadPolicy.syntaxStyleFor`). Highlighting
   used to be dropped for a payload with a pathologically long line, because the editor re-tokenizes the
   whole logical line that a painted row belongs to, so repaint cost is set by the *longest line* rather
@@ -189,7 +224,7 @@ Pretty/
 | `prettyview.detect` | `MessageSplitter` (headers vs body), `PayloadFormat` enum, `ContentTypeSniffer` (content-type then body sniffing). |
 | `prettyview.formatters` | `UniversalPrettifierManager` (registry + threshold + fail-open), `PrettyResult` (text / format / fallback / note / overThreshold), and one `PrettyPrettifier` per format. |
 | `prettyview.async` | `PrettyWorker` bounded executor + `PrettyWorkerTask`, `ExecutorHolder` lazy init. |
-| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `LargePayloadPolicy`. |
+| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `PrettySearchBar`, `LargePayloadPolicy`. |
 | `prettyview.view` | `PrettyDefaultViewSelector` + factory — when the Pretty view should become the default. |
 
 ---
