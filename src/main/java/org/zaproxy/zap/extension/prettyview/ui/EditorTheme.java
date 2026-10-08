@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.swing.JScrollPane;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.zaproxy.zap.utils.DisplayUtils;
 import org.zaproxy.zap.utils.FontUtils;
 import org.zaproxy.zap.utils.FontUtils.FontType;
 
@@ -28,7 +29,16 @@ final class EditorTheme {
   }
 
   static Palette palette() {
-    return DARK;
+    // ZAP ships a light and a dark look and feel and lets the user switch between them while running, so
+    // the panel is asked for its palette each time it is themed rather than being told once. Asking ZAP
+    // rather than guessing keeps the editor on the same side of the light/dark line as the rest of the
+    // window: a dark editor inside a light ZAP is the seam this is here to avoid. Outside a running ZAP
+    // there is no theme to read, and the dark palette is kept as the default.
+    try {
+      return DisplayUtils.isDarkLookAndFeel() ? DARK : LIGHT;
+    } catch (RuntimeException | LinkageError e) {
+      return DARK;
+    }
   }
 
   /**
@@ -59,7 +69,7 @@ final class EditorTheme {
     area.setCurrentLineHighlightColor(palette.getBackground());
     Font font = EditorTheme.configuredFont();
     area.setFont(font);
-    PrettySyntaxScheme.apply(area, font);
+    PrettySyntaxScheme.apply(area, font, palette);
     if (pane != null) {
       pane.setViewportBorder(null);
       pane.setBorder(null);
@@ -88,6 +98,11 @@ final class EditorTheme {
 
     String getName() {
       return this.name;
+    }
+
+    /** Whether this palette paints light text on a dark background. */
+    boolean isDark() {
+      return "dark".equals(this.name);
     }
 
     Color getBackground() {
