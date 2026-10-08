@@ -31,7 +31,7 @@ implements PrettyPrettifier {
     }
     Document document = HtmlPrettifier.parse(body);
     this.formatEmbeddedCode(document);
-    document.outputSettings().prettyPrint(true).indentAmount(INDENT_AMOUNT).escapeMode(Entities.EscapeMode.base);
+    document.outputSettings().prettyPrint(true).indentAmount(INDENT_AMOUNT).escapeMode(Entities.EscapeMode.base).maxPaddingWidth(-1);
     return HtmlPrettifier.indentEmbeddedBlocks(document.outerHtml(), INDENT_AMOUNT);
   }
 
