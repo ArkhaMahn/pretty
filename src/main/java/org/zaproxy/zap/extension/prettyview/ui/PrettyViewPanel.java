@@ -110,7 +110,7 @@ extends JPanel {
   }
 
   private void applyScrollUnit() {
-    int unit = Math.max(8, this.textArea.getFontMetrics(this.textArea.getFont()).getHeight());
+    int unit = Math.max(8, this.textArea.getLineHeight());
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null) {
       vertical.setUnitIncrement(unit);
@@ -127,7 +127,7 @@ extends JPanel {
     if (vertical == null) {
       return;
     }
-    int unit = Math.max(8, this.textArea.getFontMetrics(this.textArea.getFont()).getHeight());
+    int unit = Math.max(8, this.textArea.getLineHeight());
     int height = this.scrollPane.getViewport().getHeight();
     vertical.setBlockIncrement(Math.max(unit, height - unit));
   }
