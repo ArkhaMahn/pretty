@@ -7,7 +7,9 @@ import javax.swing.JComponent;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import org.apache.commons.configuration.FileConfiguration;
+import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.fife.ui.rsyntaxtextarea.TokenMakerFactory;
 import org.zaproxy.zap.extension.httppanel.Message;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelView;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelViewModel;
@@ -49,6 +51,10 @@ HttpPanelViewModelListener {
 
   private RSyntaxTextArea createTextArea() {
     RSyntaxTextArea area = new RSyntaxTextArea();
+    if (area.getDocument() instanceof RSyntaxDocument) {
+      ((RSyntaxDocument) area.getDocument())
+          .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
+    }
     LargePayloadPolicy.applyBaseline(area);
     area.setEditable(true);
     area.setText("");
