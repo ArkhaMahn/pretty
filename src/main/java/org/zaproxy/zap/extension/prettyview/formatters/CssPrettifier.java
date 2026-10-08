@@ -26,6 +26,8 @@ implements PrettyPrettifier {
     private int blockDepth;
     /** Depth of open "(", so an at-rule or function argument colon can be told from a selector's. */
     private int parenDepth;
+    /** Depth of the innermost open "url(" call, or -1 outside one. A URL is text, not CSS to format. */
+    private int urlDepth = -1;
 
     Writer(int capacity) {
       this.out = new StringBuilder(Math.max(256, capacity + capacity / 4 + 64));
@@ -110,16 +112,26 @@ implements PrettyPrettifier {
           case ';': {
             this.trimTrailingSpaces();
             this.line.append(c);
-            this.newLine();
+            // Inside parens the semicolon is part of what is written there - the ";base64," of a data
+            // URI - rather than the end of a declaration, so it leaves the line where it is.
+            if (this.parenDepth == 0) {
+              this.newLine();
+            }
             continue block11;
           }
           case '(': 
           case ')': {
             if (c == '(') {
               ++this.parenDepth;
+              if (this.opensUrlCall()) {
+                this.urlDepth = this.parenDepth;
+              }
             }
             else {
               this.parenDepth = Math.max(0, this.parenDepth - 1);
+              if (this.urlDepth > this.parenDepth) {
+                this.urlDepth = -1;
+              }
             }
             this.line.append(c);
             continue block11;
@@ -129,8 +141,14 @@ implements PrettyPrettifier {
             continue block11;
           }
           case ',': {
+            // A comma joins selectors, at-rule conditions and declaration values alike, and ends none
+            // of them: only ";" and "}" close something, so the line carries on after a comma. Inside
+            // parens it separates function arguments instead, where the call is left as it was written
+            // - "url(data:image/png;base64,AAA)" must not gain a character the URL does not have.
             this.line.append(c);
-            this.newLine();
+            if (this.parenDepth == 0 && next != 0 && !Character.isWhitespace(next)) {
+              this.line.append(' ');
+            }
             continue block11;
           }
           case '\n': 
@@ -162,11 +180,41 @@ implements PrettyPrettifier {
       this.trimTrailingSpaces();
       // decide before the colon lands on the line, otherwise the name no longer looks like a name
       boolean doubleColon = this.line.length() > 0 && this.line.charAt(this.line.length() - 1) == ':';
-      boolean separated = this.parenDepth > 0 || this.blockDepth > 0 && isPropertyName(this.line);
+      boolean separated = (this.parenDepth > 0 && !this.insideUrl())
+          || this.blockDepth > 0 && isPropertyName(this.line);
       this.line.append(':');
       if (!doubleColon && separated) {
         this.line.append(' ');
       }
+    }
+
+    /**
+     * True inside a {@code url(...)} call, where the text is the URL itself: {@code data:image/png} is
+     * one token and "data: image/png" is a broken one, so nothing is added between its characters.
+     */
+    private boolean insideUrl() {
+      return this.urlDepth > 0 && this.parenDepth >= this.urlDepth;
+    }
+
+    /** True when the line so far ends in "url", so the "(" about to be read opens a URL call. */
+    private boolean opensUrlCall() {
+      int end = this.line.length();
+      while (end > 0 && Character.isWhitespace(this.line.charAt(end - 1))) {
+        --end;
+      }
+      if (end < 3) {
+        return false;
+      }
+      if (end > 3 && isIdentifierChar(this.line.charAt(end - 4))) {
+        return false;
+      }
+      return (this.line.charAt(end - 3) | 32) == 'u'
+          && (this.line.charAt(end - 2) | 32) == 'r'
+          && (this.line.charAt(end - 1) | 32) == 'l';
+    }
+
+    private static boolean isIdentifierChar(char c) {
+      return c == '-' || Character.isJavaIdentifierPart(c);
     }
 
     /** True when the line so far is just a property name, which is what precedes a declaration colon. */
