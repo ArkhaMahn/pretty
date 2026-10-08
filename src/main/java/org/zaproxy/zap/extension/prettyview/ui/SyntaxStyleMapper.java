@@ -43,7 +43,10 @@ public final class SyntaxStyleMapper {
         return "text/markdown";
       }
       case MULTIPART: {
-        return "text/plain";
+        // A multipart body is a run of MIME part headers followed by a blank line and the part body. There
+        // is no MIME tokenizer, but each header is a "Name: value" line, which is what the properties
+        // tokenizer already colours - so the part headers come out readable instead of as one flat block.
+        return "text/properties";
       }
     }
     return "text/plain";
