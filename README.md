@@ -64,10 +64,13 @@ plain text.
   down. The identical characters handed to the editor as 2 000-char lines repaint in **6 ms median and
   21 ms p95**. The seam between pieces shows in the editor but not in the payload: every copy hands back
   the characters as the response holds them, and an edited body is written back to the message in its
-  original form rather than with the seams in it. A break is only placed where no string literal and no
-  comment is open, so a long `"aaaa…"` reaches the editor whole — cut in half, its continuation has no
-  closing quote in sight and stops highlighting as a string. That is what the extra characters buy: a
-  line runs to 4 000 at most, and a string longer than that is cut as late as it can be. Chunk size was
+  original form rather than with the seams in it. A break is held off while a string literal or a comment
+  is open, so a long `"aaaa…"` reaches the editor whole; a string longer than 4 000 is cut as late as it
+  can be, and the half beyond the seam is still drawn as a string. That last part is `ContinuedStringTokenMaker`:
+  a token maker that sees the previous line end with an open quote records the quote and the delegate's own
+  continuation state in the value it returns, and reads the next line from there — up to the closing quote
+  as one string token, the rest handed back to the delegate as the language it belongs to. Without it the
+  editor tokenizes the continuation from scratch and it reads as bare text. Chunk size was
   measured, not guessed: 1 000 chars gave 7 ms/20 ms, 2 000 gave 5-6 ms/14-21 ms, 4 000 gave 8 ms/19 ms.
 - **The font is ZAP's, not a hardcoded one** (`EditorTheme.configuredFont`). The editor, its gutter and its
   overview ruler all use the font ZAP is configured to use for work panels — the one set under *Configure
@@ -124,7 +127,12 @@ plain text.
   spaces and exposes no setting; `JsonPrettifier` now serialises through a `JsonWriter` carrying
   `PrettyPrettifier.INDENT`, and `Gson.toJson(JsonElement, JsonWriter)` copies its own `htmlSafe` and
   `serializeNulls` flags onto that writer without touching the indent, so JSON follows the same constant
-  as everything else.
+  as everything else. jsoup has a second, quieter cap on the same indentation: `OutputSettings.maxPaddingWidth`
+  defaults to **30**, so any element nested deeper than that was indented to a fixed 30 columns and the tree
+  stopped reading as a tree. `HtmlPrettifier` now sets `.maxPaddingWidth(-1)`, which removes the cap. On a
+  real zooplus.com homepage the lines whose indent was not a multiple of four fall from 2 114 to 89, and the
+  89 that remain are continuation lines inside a multi-line `srcset` attribute, which is the attribute's own
+  text and is left as written.
 - **One True Brace Style (1TBS)** — the opening brace of a block stays on the line that introduces it,
   and only its body moves down a level: `if (a) {` / `    b()` / `}`. The closing brace realigns to the
   start of the statement that opened the block. This holds in JavaScript, CSS and GraphQL alike, so
@@ -229,8 +237,12 @@ Gradle is also configured (`org.zaproxy.add-on` 0.13.1, Java 17, ZAP 2.17.0) if 
   for assignments, calls, callbacks, object members and nested blocks alike.
 - `/tmp/opencode/verify/SplitCheck.java` (11 227 checks) covers the display split, including the
   string rule: a payload whose two strings straddle the 2 000-character boundary comes back in one
-  piece per string, no break lands inside a string, a comment's apostrophe does not miscount as one,
-  and every split still hands the original text back.
+  piece per string, no break lands inside a string short enough to keep whole, a comment's apostrophe
+  does not miscount as one, and every split still hands the original text back.
+- `/tmp/opencode/verify/ZooplusTokenCheck.java` runs the split of the zooplus.com homepage through
+  `ContinuedStringTokenMaker` and asserts that every display line ending inside an open string is
+  followed by a line whose first token is that same string. It finds 63 open-string lines and 0
+  uncoloured continuations; run against the stock token maker the same payload loses all 63.
 
 ### Defects fixed
 
