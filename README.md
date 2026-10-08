@@ -69,9 +69,17 @@ plain text.
 - **The wheel and the arrow keys move the view by a line** (`PrettyViewPanel.installScrolling`). Swing's
   default unit increment for a scroll pane comes from the view and can be a handful of pixels on a text
   area, which reads as a wheel that barely moves the text. The scroll bars are given a unit increment of
-  one row — taken from the editor's own font metrics, so it follows a font change — a block increment of a
-  viewport less a row, and FlatLaf's `"JScrollPane.smoothScrolling"` client property so a notch on a
-  trackpad glides instead of jumping. The block increment is recomputed when the viewport is resized.
+  one row — taken from the editor's own line height, so it follows a font change and the extra row spacing
+  below — a block increment of a viewport less a row, and FlatLaf's `"JScrollPane.smoothScrolling"` client
+  property so a notch on a trackpad glides instead of jumping. The block increment is recomputed when the
+  viewport is resized.
+- **Lines are given more room** (`PrettyTextArea`). RSTA fixes row spacing at the font's line height, which
+  packs a wall of JSON or HTML tightly enough to read as a solid block. The editor subclass raises
+  `getLineHeight()` by 35% of the font's own line height (at least two pixels). The syntax view, the token
+  painter, the line-number gutter and the fold/overview markers all ask the text area for that value, so
+  raising it here spaces the body and the gutter together — writing RSTA's private `lineHeight` field
+  instead would leave the gutter misaligned with the text. The margin is a proportion rather than a fixed
+  number of pixels, so it follows the font chosen under ZAP's Configure Fonts.
 - **A malformed token no longer reads as a quoted one** (`PrettySyntaxScheme`, `SyntaxStyleMapper`). The
   tokenizer's two error types, `ERROR_IDENTIFIER` and `ERROR_NUMBER_FORMAT`, used to be painted in the
   string colour because they fell through to the same bucket, which made a value the language could not
@@ -224,7 +232,7 @@ Pretty/
 | `prettyview.detect` | `MessageSplitter` (headers vs body), `PayloadFormat` enum, `ContentTypeSniffer` (content-type then body sniffing). |
 | `prettyview.formatters` | `UniversalPrettifierManager` (registry + threshold + fail-open), `PrettyResult` (text / format / fallback / note / overThreshold), and one `PrettyPrettifier` per format. |
 | `prettyview.async` | `PrettyWorker` bounded executor + `PrettyWorkerTask`, `ExecutorHolder` lazy init. |
-| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `PrettySearchBar`, `LargePayloadPolicy`. |
+| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `PrettySearchBar`, `PrettyTextArea`, `LargePayloadPolicy`. |
 | `prettyview.view` | `PrettyDefaultViewSelector` + factory — when the Pretty view should become the default. |
 
 ---
