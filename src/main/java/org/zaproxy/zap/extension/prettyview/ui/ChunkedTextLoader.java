@@ -36,19 +36,13 @@ final class ChunkedTextLoader {
     // every insertion, which drags the viewport down to the bottom of the payload as it streams in.
     // Freezing the policy for the whole load keeps the caret - and so the view - where the caller left it.
     //
-    // Wrapping is also switched off for the duration and put back in finish(). With wrapping on, every
-    // chunk re-wraps the whole line it lands on, which is what makes streaming slow: a 652 KB body that is
-    // one line measures about 3.5 s that way against 220 ms unwrapped, and the plain body exists only to
-    // avoid the same cost being 50 s in the syntax editor. One wrap pass at the end instead of one per
-    // chunk. The trade is that while the payload is streaming it is briefly not wrapped.
-    boolean wrapping = area.getLineWrap();
-    boolean wordWrapping = area.getWrapStyleWord();
-    area.setLineWrap(false);
-    Runnable finish = () -> {
-      area.setLineWrap(wrapping);
-      area.setWrapStyleWord(wordWrapping);
-      onComplete.run();
-    };
+    // Wrapping is left alone for the duration. It used to be switched off while the body streamed in and
+    // back on at the end, to save re-laying out the line each chunk lands on, but that trade is no longer
+    // worth it: the text is already broken into display lines no longer than DisplayLineSplitter's
+    // MAX_CHUNK_CHARS, so a landing chunk only re-wraps the short line it ends in, and turning wrapping
+    // back on at the end re-flowed the whole document in one visible jump exactly as loading finished.
+    // Keeping it on means the payload looks the same the first time it is drawn as it does when done.
+    Runnable finish = onComplete;
     Caret caret = area.getCaret();
     if (caret instanceof DefaultCaret) {
       DefaultCaret freezable = (DefaultCaret)caret;
