@@ -50,7 +50,7 @@ HttpPanelViewModelListener {
   }
 
   private RSyntaxTextArea createTextArea() {
-    RSyntaxTextArea area = new RSyntaxTextArea();
+    RSyntaxTextArea area = new PrettyTextArea();
     if (area.getDocument() instanceof RSyntaxDocument) {
       ((RSyntaxDocument) area.getDocument())
           .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
