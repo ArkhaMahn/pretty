@@ -96,6 +96,14 @@ plain text.
   split-aware copy the Pretty view installs rather than RSTA's default. ZAP's request and response views
   put their search where the message is, so this is the same idea brought into the Pretty view, and it is
   backed by RSTA's own `SearchEngine` rather than a second implementation.
+- **ZAP's own request and response panels get the same right-click menu** (`TextContextMenu`,
+  `ExtensionPrettyView.installCoreContextMenus`). The core text views otherwise carry only ZAP's message
+  menu (Open, Resend and so on), with no Cut, Copy, Paste or Find, so `postInit` walks the live request
+  and response panels, finds every `HttpPanelTextArea`, and puts the shared menu in place of whatever
+  the view had, remembering it so unloading the add-on restores it. Because the menu is built from the
+  target's action map at open time it works unchanged on both the RSTA editor and the plain text areas,
+  greys out Undo / Redo / Cut / Paste / Delete on the read-only core views, and sends Find to ZAP's
+  Search tab (`SearchPanel.searchFocus`) rather than the Pretty view's inline bar.
 - **Over-long lines are broken at 2 000-character boundaries, held back to 4 000 while a string or a
   comment is open** (`DisplayLineSplitter.copyChunked`). Wrapping alone is not enough to keep scrolling
   smooth, because the editor wraps by handing the whole logical line to a layout view and redoing that
@@ -159,6 +167,9 @@ plain text.
   5 MB still prettifies and still opens in Pretty, and one byte more does not.
 - **Chunked loading** (`ChunkedTextLoader`) keeps the notice bar responsive while the document streams in.
 - **Write-back** (`PrettyWriteBack`) pushes edits made in the Pretty tab back to the underlying message.
+  Editing matches the core panels: the flag the host panel passes is honoured rather than forced, so the
+  main-window request and response tabs are read-only and only the Manual Request Editor's request accepts
+  edits and writes back. Responses are never written back.
 - **Fail-open everywhere** — every prettifier failure is caught and the raw body is shown instead;
   detection and formatting never block the panel.
 - **Four-space indentation** — every prettifier emits four spaces per level, and never a tab. The unit
@@ -232,7 +243,7 @@ Pretty/
 | `prettyview.detect` | `MessageSplitter` (headers vs body), `PayloadFormat` enum, `ContentTypeSniffer` (content-type then body sniffing). |
 | `prettyview.formatters` | `UniversalPrettifierManager` (registry + threshold + fail-open), `PrettyResult` (text / format / fallback / note / overThreshold), and one `PrettyPrettifier` per format. |
 | `prettyview.async` | `PrettyWorker` bounded executor + `PrettyWorkerTask`, `ExecutorHolder` lazy init. |
-| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `PrettySearchBar`, `PrettyTextArea`, `LargePayloadPolicy`. |
+| `prettyview.ui` | `CustomPrettyView` / `PrettyViewPanel` / `PrettyViewModel`, `PrettyNoticeBar`, `ChunkedTextLoader`, `EditorTheme`, `PrettySyntaxScheme`, `SyntaxStyleMapper`, `PrettySearchBar`, `PrettyTextArea`, `TextContextMenu`, `LargePayloadPolicy`. |
 | `prettyview.view` | `PrettyDefaultViewSelector` + factory — when the Pretty view should become the default. |
 
 ---

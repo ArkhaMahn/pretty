@@ -18,9 +18,7 @@ import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
-import javax.swing.JMenuItem;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -48,7 +46,7 @@ extends JPanel {
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
   private DisplayLineSplitter.Split split;
   private CopyAction copyAction;
-  private PrettyMenu popupMenu;
+  private TextContextMenu contextMenu;
 
   public PrettyViewPanel(RSyntaxTextArea textArea) {
     super(new BorderLayout());
@@ -143,7 +141,7 @@ extends JPanel {
    * the keyboard shortcut is not known.
    */
   private void installPopupMenu() {
-    PrettyMenu menu = new PrettyMenu();
+    this.contextMenu = new TextContextMenu(this::openSearch, this.searchBar::findNext, this.searchBar::findPrevious);
     this.textArea.addMouseListener(new MouseAdapter() {
       @Override
       public void mousePressed(MouseEvent event) {
@@ -155,7 +153,6 @@ extends JPanel {
         PrettyViewPanel.this.showPopup(event);
       }
     });
-    this.popupMenu = menu;
   }
 
   private void showPopup(MouseEvent event) {
@@ -168,65 +165,7 @@ extends JPanel {
         this.textArea.setCaretPosition(position);
       }
     }
-    this.popupMenu.show(event.getComponent(), event.getX(), event.getY());
-  }
-
-  private final class PrettyMenu extends JPopupMenu {
-    private static final long serialVersionUID = 1L;
-
-    @Override
-    public void show(Component invoker, int x, int y) {
-      this.populate();
-      super.show(invoker, x, y);
-    }
-
-    /** Fills the menu from the editor's current actions; runs each time the menu opens. */
-    private void populate() {
-      this.removeAll();
-      this.add(PrettyViewPanel.this.actionItem("RTA.UndoAction", "Undo"));
-      this.add(PrettyViewPanel.this.actionItem("RTA.RedoAction", "Redo"));
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.actionItem("cut-to-clipboard", "Cut"));
-      this.add(PrettyViewPanel.this.copyItem());
-      this.add(PrettyViewPanel.this.actionItem("paste-from-clipboard", "Paste"));
-      this.add(PrettyViewPanel.this.deleteItem());
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.menuItem("Find...", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), () -> PrettyViewPanel.this.openSearch()));
-      this.add(PrettyViewPanel.this.menuItem("Find Next", KeyStroke.getKeyStroke(KeyEvent.VK_F3, 0), () -> PrettyViewPanel.this.searchBar.findNext()));
-      this.add(PrettyViewPanel.this.menuItem("Find Previous", KeyStroke.getKeyStroke(KeyEvent.VK_F3, InputEvent.SHIFT_DOWN_MASK), () -> PrettyViewPanel.this.searchBar.findPrevious()));
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.actionItem("select-all", "Select All"));
-    }
-  }
-
-  private JMenuItem actionItem(String actionKey, String label) {
-    Action action = this.textArea.getActionMap().get(actionKey);
-    JMenuItem item = action == null ? new JMenuItem(label) : new JMenuItem(action);
-    item.setText(label);
-    return item;
-  }
-
-  private JMenuItem copyItem() {
-    // Deliberately looks "copy" up at open time: it is the split-aware action once a payload is shown.
-    Action action = this.textArea.getActionMap().get(COPY_KEY);
-    JMenuItem item = action == null ? new JMenuItem("Copy") : new JMenuItem(action);
-    item.setText("Copy");
-    return item;
-  }
-
-  private JMenuItem deleteItem() {
-    JMenuItem item = this.menuItem("Delete", null, () -> this.textArea.replaceSelection(""));
-    item.setEnabled(this.textArea.getSelectionStart() != this.textArea.getSelectionEnd());
-    return item;
-  }
-
-  private JMenuItem menuItem(String text, KeyStroke accelerator, Runnable action) {
-    JMenuItem item = new JMenuItem(text);
-    if (accelerator != null) {
-      item.setAccelerator(accelerator);
-    }
-    item.addActionListener(event -> action.run());
-    return item;
+    this.contextMenu.show(event.getComponent(), event.getX(), event.getY());
   }
 
   /** Ctrl+F opens the find bar, F3 walks the matches, and Escape puts the bar away again. */
