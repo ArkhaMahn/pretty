@@ -121,12 +121,18 @@ implements PrettyPrettifier {
               loopParenBase = parenDepth;
             }
             ++parenDepth;
-            break;
           }
-          if (c != ')') break;
-          parenDepth = Math.max(0, parenDepth - 1);
-          if (loopParenBase >= 0 && parenDepth <= loopParenBase) {
-            loopParenBase = -1;
+          else if (c == ')') {
+            parenDepth = Math.max(0, parenDepth - 1);
+            if (loopParenBase >= 0 && parenDepth <= loopParenBase) {
+              loopParenBase = -1;
+            }
+          }
+          if (c == '(' || c == '[') {
+            ++writer.openBrackets;
+          }
+          else if (c == ')' || c == ']') {
+            writer.openBrackets = Math.max(0, writer.openBrackets - 1);
           }
         }
       }
@@ -276,6 +282,13 @@ implements PrettyPrettifier {
     /** One entry per open brace: {@link #BLOCK}, {@link #LITERAL} or {@link #CLAUSE}. */
     private int[] braceKinds = new int[16];
     private int braceDepth;
+    /** Depth of open "(" and "[", so what follows a closing brace can be told from a new statement. */
+    int openBrackets;
+    /**
+     * Set while a block's {@code } is the last thing on the line and nothing has yet said where the
+     * line ends: the break is owed, but a ";" or ")" that follows belongs to the brace itself.
+     */
+    private boolean pendingBreak;
 
     Writer(int capacity) {
       this.out = new StringBuilder(Math.max(256, capacity + capacity / 4 + 64));
@@ -284,10 +297,39 @@ implements PrettyPrettifier {
     Writer append(char c) {
       if (c == '\n') {
         this.newLine();
-      } else {
-        this.line.append(c);
+        return this;
       }
+      if (this.pendingBreak
+          && !Character.isWhitespace(c)
+          && !attachesToClosingBrace(c)
+          && !this.continuesExpression()) {
+        this.newLine();
+      }
+      this.line.append(c);
       return this;
+    }
+
+    /**
+     * A character that can only continue the expression the closing brace belongs to: the ";" that
+     * ends the statement, the ")" or "]" that closes the call or array holding it, the "," between
+     * its members. It joins the brace - "};", "})", "}," - instead of being stranded on a line.
+     */
+    private static boolean attachesToClosingBrace(char c) {
+      switch (c) {
+        case ';':
+        case ')':
+        case ']':
+        case ',':
+        case '.':
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    /** Inside brackets but outside every brace, where a fresh statement cannot begin. */
+    private boolean continuesExpression() {
+      return this.braceDepth == 0 && this.openBrackets > 0;
     }
 
     void trimTrailingWhitespace() {
@@ -367,7 +409,9 @@ implements PrettyPrettifier {
       }
       this.indent = Math.max(0, this.indent - 1);
       this.append('}');
-      this.newLine();
+      // The break is owed but not yet claimed: a ";" or ")" straight after the brace joins it, and
+      // only whatever cannot continue the statement pays it.
+      this.pendingBreak = true;
     }
 
     /** A {@code case} or {@code default} label starts, so step out of the previous body. */
@@ -400,6 +444,7 @@ implements PrettyPrettifier {
     }
 
     void newLine() {
+      this.pendingBreak = false;
       if (this.line.length() == 0) {
         return;
       }
