@@ -33,6 +33,7 @@ HttpPanelViewModelListener {
   private final PrettyWorker worker;
   private final AtomicInteger generation = new AtomicInteger();
   private boolean loading;
+  private boolean editable;
   private String parentConfigurationKey;
   private String lastFormatted = "";
   private DisplayLineSplitter.Split split;
@@ -56,7 +57,7 @@ HttpPanelViewModelListener {
           .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
     }
     LargePayloadPolicy.applyBaseline(area);
-    area.setEditable(true);
+    area.setEditable(false);
     area.setText("");
     EditorTheme.apply(area, null, EditorTheme.palette());
     return area;
@@ -123,7 +124,7 @@ HttpPanelViewModelListener {
       }
       this.lastFormatted = split.displayText();
       this.loading = false;
-      this.panel.getTextArea().setEditable(true);
+      this.panel.setEditable(this.editable);
       this.panel.endLoad();
     });
   }
@@ -216,6 +217,11 @@ HttpPanelViewModelListener {
   }
 
   private boolean writeBackToMessage(String current) {
+    // Only an editable view writes back. ZAP keeps responses read-only everywhere and requests
+    // read-only in the main window, so this mirrors the core panels instead of always persisting.
+    if (!this.editable) {
+      return false;
+    }
     String formatted = this.split == null ? current : this.split.toOriginal(current);
     return PrettyWriteBack.apply(this.model.getMessage(), this.request, formatted);
   }
@@ -240,13 +246,17 @@ HttpPanelViewModelListener {
 
   @Override
   public boolean isEditable() {
-    return true;
+    return this.editable;
   }
 
   @Override
   public void setEditable(boolean editable) {
-    // stays editable whatever the framework asks for, because the view is meant to be edited and saved
-    this.panel.setEditable(true);
+    // Follow the host panel: ZAP's main request and response panels are read-only, and only the
+    // Manual Request Editor's request is editable. Writing back is gated on the same flag.
+    this.editable = editable;
+    if (!this.loading) {
+      this.panel.setEditable(editable);
+    }
   }
 
   @Override
