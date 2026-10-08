@@ -109,6 +109,10 @@ public final class LargePayloadPolicy {
     area.setClearWhitespaceLinesEnabled(false);
     area.setHighlightSecondaryLanguages(false);
     area.setUseFocusableTips(false);
+    // Monospaced glyphs are not all the same width, so letting the editor measure them fractionally keeps
+    // the characters evenly spaced instead of snapping each one to a whole pixel. RSTA only turns this on
+    // by itself on some platforms; asking for it explicitly makes the text look the same everywhere.
+    area.setFractionalFontMetricsEnabled(true);
   }
 
   public static void applyForSize(RSyntaxTextArea area, String text) {
