@@ -79,7 +79,14 @@ extends ExtensionAdaptor {
       }
     }
     if (root instanceof Container) {
-      for (Component child : ((Container) root).getComponents()) {
+      Container container = (Container) root;
+      container.addHierarchyListener(event -> {
+        if (event.getChangeFlags() != 0) {
+          this.installCoreContextMenus(container);
+          this.installCoreContextMenus(event.getComponent());
+        }
+      });
+      for (Component child : container.getComponents()) {
         this.installCoreContextMenus(child);
       }
     }
