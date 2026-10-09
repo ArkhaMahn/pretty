@@ -56,6 +56,9 @@ extends ExtensionAdaptor {
   @Override
   public void postInit() {
     super.postInit();
+    if (!hasView()) {
+      return;
+    }
     View view = View.getSingleton();
     if (view == null) {
       return;
