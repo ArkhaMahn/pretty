@@ -2,9 +2,11 @@ package org.zaproxy.zap.extension.prettyview;
 
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Window;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import javax.swing.JPopupMenu;
+import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
 import org.parosproxy.paros.extension.AbstractPanel;
@@ -63,8 +65,24 @@ extends ExtensionAdaptor {
     if (view == null) {
       return;
     }
-    this.installCoreContextMenus(view.getRequestPanel());
-    this.installCoreContextMenus(view.getResponsePanel());
+    SwingUtilities.invokeLater(() -> {
+      this.installCoreContextMenus(view.getRequestPanel());
+      this.installCoreContextMenus(view.getResponsePanel());
+      Window window = SwingUtilities.getWindowAncestor(view.getRequestPanel());
+      if (window == null && view.getWorkbench() != null) {
+        window = SwingUtilities.getWindowAncestor(view.getWorkbench());
+      }
+      if (window != null) {
+        window.addHierarchyListener(e -> {
+          if (e.getChangeFlags() != 0) {
+            SwingUtilities.invokeLater(() -> {
+              this.installCoreContextMenus(view.getRequestPanel());
+              this.installCoreContextMenus(view.getResponsePanel());
+            });
+          }
+        });
+      }
+    });
   }
 
   private void installCoreContextMenus(Component root) {
@@ -74,18 +92,20 @@ extends ExtensionAdaptor {
     if (root instanceof HttpPanelTextArea) {
       HttpPanelTextArea area = (HttpPanelTextArea) root;
       if (!this.replacedPopupMenus.containsKey(area)) {
-        this.replacedPopupMenus.put(area, area.getComponentPopupMenu());
-        area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
+        JPopupMenu existing = area.getComponentPopupMenu();
+        if (existing != null && existing.getClass().getName().contains("CustomPopupMenu")) {
+          this.replacedPopupMenus.put(area, existing);
+          area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
+        } else if (existing != null && existing instanceof TextContextMenu) {
+          this.replacedPopupMenus.put(area, existing);
+        } else {
+          this.replacedPopupMenus.put(area, existing);
+          area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
+        }
       }
     }
     if (root instanceof Container) {
       Container container = (Container) root;
-      container.addHierarchyListener(event -> {
-        if (event.getChangeFlags() != 0) {
-          this.installCoreContextMenus(container);
-          this.installCoreContextMenus(event.getComponent());
-        }
-      });
       for (Component child : container.getComponents()) {
         this.installCoreContextMenus(child);
       }
