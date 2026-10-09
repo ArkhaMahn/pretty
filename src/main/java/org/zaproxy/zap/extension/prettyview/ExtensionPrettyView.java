@@ -93,14 +93,14 @@ extends ExtensionAdaptor {
       HttpPanelTextArea area = (HttpPanelTextArea) root;
       if (!this.replacedPopupMenus.containsKey(area)) {
         JPopupMenu existing = area.getComponentPopupMenu();
-        if (existing != null && existing.getClass().getName().contains("CustomPopupMenu")) {
-          this.replacedPopupMenus.put(area, existing);
-          area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
-        } else if (existing != null && existing instanceof TextContextMenu) {
-          this.replacedPopupMenus.put(area, existing);
-        } else {
-          this.replacedPopupMenus.put(area, existing);
-          area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
+        this.replacedPopupMenus.put(area, existing);
+      }
+      area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
+      if (area.getParent() instanceof javax.swing.JScrollPane) {
+        javax.swing.JScrollPane sp = (javax.swing.JScrollPane) area.getParent();
+        sp.setComponentPopupMenu(area.getComponentPopupMenu());
+        if (sp.getViewport() != null) {
+          sp.getViewport().setComponentPopupMenu(area.getComponentPopupMenu());
         }
       }
     }
