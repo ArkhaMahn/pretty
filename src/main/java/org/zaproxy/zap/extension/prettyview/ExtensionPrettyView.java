@@ -3,9 +3,12 @@ package org.zaproxy.zap.extension.prettyview;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Window;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import javax.swing.JPopupMenu;
+import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
@@ -95,12 +98,53 @@ extends ExtensionAdaptor {
         JPopupMenu existing = area.getComponentPopupMenu();
         this.replacedPopupMenus.put(area, existing);
       }
-      area.setComponentPopupMenu(new TextContextMenu(this::focusZapSearch, null, null));
-      if (area.getParent() instanceof javax.swing.JScrollPane) {
-        javax.swing.JScrollPane sp = (javax.swing.JScrollPane) area.getParent();
-        sp.setComponentPopupMenu(area.getComponentPopupMenu());
+      TextContextMenu menu = new TextContextMenu(this::focusZapSearch, null, null);
+      area.setComponentPopupMenu(null);
+      area.addMouseListener(new MouseAdapter() {
+        @Override
+        public void mousePressed(MouseEvent event) {
+          maybeShow(event);
+        }
+
+        @Override
+        public void mouseReleased(MouseEvent event) {
+          maybeShow(event);
+        }
+
+        private void maybeShow(MouseEvent event) {
+          if (event.isPopupTrigger()) {
+            if (area.getSelectionStart() == area.getSelectionEnd()) {
+              int pos = area.viewToModel2D(event.getPoint());
+              if (pos >= 0) {
+                area.setCaretPosition(pos);
+              }
+            }
+            menu.show(area, event.getX(), event.getY());
+          }
+        }
+      });
+      if (area.getParent() instanceof JScrollPane) {
+        JScrollPane sp = (JScrollPane) area.getParent();
+        sp.setComponentPopupMenu(null);
         if (sp.getViewport() != null) {
-          sp.getViewport().setComponentPopupMenu(area.getComponentPopupMenu());
+          sp.getViewport().setComponentPopupMenu(null);
+          sp.getViewport().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent event) {
+              maybeShow(event);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent event) {
+              maybeShow(event);
+            }
+
+            private void maybeShow(MouseEvent event) {
+              if (event.isPopupTrigger()) {
+                menu.show(sp.getViewport(), event.getX(), event.getY());
+              }
+            }
+          });
         }
       }
     }
