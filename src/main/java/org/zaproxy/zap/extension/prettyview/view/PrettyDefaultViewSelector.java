@@ -22,28 +22,41 @@ implements HttpPanelDefaultViewSelector {
   private final String viewName;
   private final boolean request;
   private final int maxPrettifyChars;
+  private final ViewChoiceMemory choices;
 
   public PrettyDefaultViewSelector(
       String name, String viewName, boolean request, int maxPrettifyChars) {
+    this(name, viewName, request, maxPrettifyChars, null);
+  }
+
+  public PrettyDefaultViewSelector(
+      String name,
+      String viewName,
+      boolean request,
+      int maxPrettifyChars,
+      ViewChoiceMemory choices) {
     this.name = Objects.requireNonNull(name, "name");
     this.viewName = Objects.requireNonNull(viewName, "viewName");
     this.request = request;
     this.maxPrettifyChars = maxPrettifyChars;
+    this.choices = choices;
   }
 
   /**
    * Whether a body of this length is one Pretty View should be the default view for.
    *
-   * <p>Nothing to prettify means nothing to offer: past the prettify threshold the add-on hands the body
-   * back verbatim, so a raw text view is the better default and ZAP's own large body view, which sits at
-   * order 50 and takes anything from 100 KB, is allowed to win instead.
+   * <p>Empty bodies are claimed too: showing the empty Pretty tab keeps the tab put when nothing is
+   * selected (a Sites node rather than a link), instead of dropping back to Text. Past the prettify
+   * threshold the add-on hands the body back verbatim, so a raw text view is the better default and
+   * ZAP's own large body view, which sits at order 50 and takes anything from 100 KB, is allowed to
+   * win instead.
    *
    * @param bodyLength length of the body in characters
    * @param maxPrettifyChars the prettify threshold
    * @return true if Pretty View should be the default view
    */
   public static boolean claimsDefaultView(int bodyLength, int maxPrettifyChars) {
-    return bodyLength > 0 && bodyLength <= maxPrettifyChars;
+    return bodyLength >= 0 && bodyLength <= maxPrettifyChars;
   }
 
   @Override
@@ -53,13 +66,33 @@ implements HttpPanelDefaultViewSelector {
 
   @Override
   public boolean matchToDefaultView(Message message) {
+    // A stood-down side stays stood down: the user's tab stands on the next messages until they
+    // pick Pretty again.
+    if (this.choices != null && this.choices.isSuppressed(this.request)) {
+      return false;
+    }
+    return PrettyDefaultViewSelector.matchesMessage(message, this.request, this.maxPrettifyChars);
+  }
+
+  /**
+   * Whether this message would make Pretty the default view, ignoring any stood-down choice. The
+   * tracker uses the same rule to decide whether a tab switch away from Pretty was a genuine
+   * choice worth respecting.
+   */
+  static boolean matchesMessage(Message message, boolean request, int maxPrettifyChars) {
+    // No message (a Sites node rather than a link) still opens the empty Pretty tab, so the view
+    // stays put instead of dropping back to Text. Anything that is not an HTTP message at all is
+    // left to whatever owns it.
+    if (message == null) {
+      return true;
+    }
     if (!(message instanceof HttpMessage)) {
       return false;
     }
     HttpMessage httpMessage = (HttpMessage)message;
     try {
-      int length = this.request ? httpMessage.getRequestBody().length() : httpMessage.getResponseBody().length();
-      return PrettyDefaultViewSelector.claimsDefaultView(length, this.maxPrettifyChars);
+      int length = request ? httpMessage.getRequestBody().length() : httpMessage.getResponseBody().length();
+      return PrettyDefaultViewSelector.claimsDefaultView(length, maxPrettifyChars);
     }
     catch (RuntimeException e) {
       return false;

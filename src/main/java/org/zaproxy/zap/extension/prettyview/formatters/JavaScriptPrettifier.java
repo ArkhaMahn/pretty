@@ -1,6 +1,8 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -18,7 +20,7 @@ implements PrettyPrettifier {
   }
 
   @Override
-  public String prettify(String body) {
+  public String prettify(String body) throws PrettificationException {
     if (body == null || body.isEmpty()) {
       return "";
     }
@@ -27,8 +29,17 @@ implements PrettyPrettifier {
     int parenDepth = 0;
     int loopParenBase = -1;
     StringBuilder lastWord = new StringBuilder();
+    // Brace depths at which a template `${` opened, innermost last. The matching `}` returns to
+    // the template instead of closing a block, which keeps nested templates such as `a${`b${c}d`}e`
+    // balanced; without this the inner backtick flips template/code parity for the rest of the file
+    // and everything after - comments, strings, divisions - is misread.
+    Deque<Integer> templateStack = new ArrayDeque<Integer>();
     int length = body.length();
     for (int i = 0; i < length; ++i) {
+      if (writer.out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+        throw new PrettificationException(
+            "JavaScript output exceeded its size cap; rendered verbatim");
+      }
       char c = body.charAt(i);
       char next = i + 1 < length ? body.charAt(i + 1) : (char)'\u0000';
       char previous = i > 0 ? body.charAt(i - 1) : (char)'\u0000';
@@ -67,6 +78,16 @@ implements PrettyPrettifier {
             ++i;
             break;
           }
+          if (c == '$' && next == '{') {
+            // An interpolation opens an expression: its braces belong to the expression, and the
+            // one that returns the depth to this mark closes the interpolation, not a block. The
+            // backslash branch above already consumed an escaped "\${", so this is a real one.
+            writer.append(next);
+            ++i;
+            templateStack.push(Integer.valueOf(writer.braceDepth));
+            state = State.CODE;
+            break;
+          }
           if (c != '`') break;
           state = State.CODE;
           break;
@@ -91,6 +112,20 @@ implements PrettyPrettifier {
           char twoBefore = writer.beforeSignificant;
           state = this.handleCode(writer, state, c, next, previous, lastWord);
           if (state != State.CODE) break;
+          if (c == '}' && !templateStack.isEmpty()
+              && writer.braceDepth == templateStack.peek().intValue()) {
+            // The interpolation opened at this depth ends here: re-enter the template without
+            // touching block balance. A block opened after the "${" always closes above this
+            // depth, so the first "}" seen exactly here can only be the interpolation's own.
+            templateStack.pop();
+            writer.lastSignificant = '}';
+            writer.beforeSignificant = before;
+            writer.lastWord = "";
+            writer.append('}');
+            lastWord.setLength(0);
+            state = State.TEMPLATE;
+            break;
+          }
           if (c == '{') {
             int kind = braceKind(before, twoBefore, completedWord, writer.afterCaseColon);
             writer.lastSignificant = '{';
@@ -152,12 +187,16 @@ implements PrettyPrettifier {
       return State.CODE;
     }
     if (c == '/' && next == '/') {
-      writer.append(c).append(next);
+      // Append only the first slash: the main loop re-processes the second one, which lands in
+      // the new comment state and is appended there. Emitting both here used to triple every
+      // "//" into "///".
+      writer.append(c);
       lastWord.setLength(0);
       return State.LINE_COMMENT;
     }
     if (c == '/' && next == '*') {
-      writer.append(c).append(next);
+      // Same single-char rule as above: the "*" is appended by the block-comment state.
+      writer.append(c);
       lastWord.setLength(0);
       return State.BLOCK_COMMENT;
     }
@@ -339,8 +378,15 @@ implements PrettyPrettifier {
     }
 
     private void pushBrace(int kind) {
+      // Braces past the drawn ceiling are still tracked for balance, but the stack itself is
+      // capped: millions of unmatched "{" must not grow this array without bound. Overflow
+      // entries are dropped and read back as BLOCK, which only affects case-label heuristics.
       if (this.braceDepth == this.braceKinds.length) {
-        this.braceKinds = Arrays.copyOf(this.braceKinds, this.braceDepth * 2);
+        if (this.braceKinds.length >= PrettyPrettifier.MAX_INDENT_DEPTH * 2) {
+          return;
+        }
+        this.braceKinds = Arrays.copyOf(this.braceKinds,
+            Math.min(this.braceDepth * 2, PrettyPrettifier.MAX_INDENT_DEPTH * 2));
       }
       this.braceKinds[this.braceDepth++] = kind;
     }
@@ -452,7 +498,8 @@ implements PrettyPrettifier {
       if (this.line.length() == 0) {
         return;
       }
-      for (int i = 0; i < this.indent; ++i) {
+      int drawn = Math.min(this.indent, PrettyPrettifier.MAX_INDENT_DEPTH);
+      for (int i = 0; i < drawn; ++i) {
         this.out.append(PrettyPrettifier.INDENT);
       }
       this.out.append((CharSequence)this.line).append('\n');

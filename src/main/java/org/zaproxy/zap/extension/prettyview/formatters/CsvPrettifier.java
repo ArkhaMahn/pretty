@@ -7,6 +7,12 @@ public class CsvPrettifier
 implements PrettyPrettifier {
   private static final int MAX_CELL_WIDTH = 60;
   private static final int MAX_ROWS = 5000;
+  /**
+   * Widest row that is still kept cell by cell. A single row with millions of delimiters must not
+   * grow the cell list without bound; overflow cells are folded into the last cell, so only the
+   * column alignment of a pathological row degrades.
+   */
+  private static final int MAX_COLUMNS = 1024;
   private static final char[] DELIMITERS = new char[]{',', '\t', '|'};
 
   @Override
@@ -20,7 +26,8 @@ implements PrettyPrettifier {
       return body == null ? "" : body;
     }
     char delimiter = CsvPrettifier.detectDelimiter(body);
-    List<String[]> rows = CsvPrettifier.parse(body, delimiter);
+    Parsed parsed = CsvPrettifier.parse(body, delimiter);
+    List<String[]> rows = parsed.rows;
     if (rows.isEmpty()) {
       return body;
     }
@@ -35,8 +42,7 @@ implements PrettyPrettifier {
       }
     }
     StringBuilder stringBuilder = new StringBuilder(body.length() + body.length() / 3 + 64);
-    int limit = Math.min(rows.size(), 5000);
-    for (int r = 0; r < limit; ++r) {
+    for (int r = 0; r < rows.size(); ++r) {
       String[] row = rows.get(r);
       for (int c = 0; c < row.length; ++c) {
         if (c > 0) {
@@ -48,8 +54,8 @@ implements PrettyPrettifier {
       }
       stringBuilder.append('\n');
     }
-    if (rows.size() > limit) {
-      stringBuilder.append("... ").append(rows.size() - limit).append(" further row(s) omitted\n");
+    if (parsed.totalRows > rows.size()) {
+      stringBuilder.append("... ").append(parsed.totalRows - rows.size()).append(" further row(s) omitted\n");
     }
     return stringBuilder.toString();
   }
@@ -75,11 +81,23 @@ implements PrettyPrettifier {
     return count;
   }
 
-  private static List<String[]> parse(String body, char delimiter) {
+  /** The first {@link #MAX_ROWS} rows plus the total row count, so the tail is counted, not kept. */
+  private static final class Parsed {
+    final List<String[]> rows;
+    final int totalRows;
+
+    Parsed(List<String[]> rows, int totalRows) {
+      this.rows = rows;
+      this.totalRows = totalRows;
+    }
+  }
+
+  private static Parsed parse(String body, char delimiter) {
     ArrayList<String[]> rows = new ArrayList<String[]>();
     ArrayList<String> cells = new ArrayList<String>();
     StringBuilder cell = new StringBuilder();
     boolean inQuotes = false;
+    int totalRows = 0;
     int length = body.length();
     for (int i = 0; i < length; ++i) {
       char c = body.charAt(i);
@@ -101,13 +119,16 @@ implements PrettyPrettifier {
         continue;
       }
       if (c == delimiter) {
-        cells.add(cell.toString());
+        CsvPrettifier.addCell(cells, cell);
         cell.setLength(0);
         continue;
       }
       if (c == '\n') {
-        cells.add(cell.toString());
-        rows.add(cells.toArray(new String[0]));
+        CsvPrettifier.addCell(cells, cell);
+        ++totalRows;
+        if (rows.size() < MAX_ROWS) {
+          rows.add(cells.toArray(new String[0]));
+        }
         cells.clear();
         cell.setLength(0);
         continue;
@@ -116,10 +137,23 @@ implements PrettyPrettifier {
       cell.append(c);
     }
     if (cell.length() > 0 || !cells.isEmpty()) {
-      cells.add(cell.toString());
-      rows.add(cells.toArray(new String[0]));
+      CsvPrettifier.addCell(cells, cell);
+      ++totalRows;
+      if (rows.size() < MAX_ROWS) {
+        rows.add(cells.toArray(new String[0]));
+      }
     }
-    return rows;
+    return new Parsed(rows, totalRows);
+  }
+
+  /** Adds a cell, folding overflow into the last cell once the row is at {@link #MAX_COLUMNS}. */
+  private static void addCell(ArrayList<String> cells, StringBuilder cell) {
+    if (cells.size() < MAX_COLUMNS) {
+      cells.add(cell.toString());
+      return;
+    }
+    int last = cells.size() - 1;
+    cells.set(last, cells.get(last) + cell.toString());
   }
 
   private static void pad(StringBuilder out, int currentLength, int targetWidth) {

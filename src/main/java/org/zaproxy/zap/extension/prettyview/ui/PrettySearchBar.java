@@ -34,6 +34,11 @@ import org.fife.ui.rtextarea.SearchResult;
 final class PrettySearchBar extends JPanel {
   private static final long serialVersionUID = 1L;
   private static final Color NO_MATCH = new Color(178, 122, 0);
+  /**
+   * Longest pattern evaluated against the document. A few dozen characters are plenty for a find
+   * bar, and an attacker-sized selection must never become a megabyte regex over a megabyte body.
+   */
+  private static final int MAX_PATTERN_CHARS = 512;
 
   private final RSyntaxTextArea textArea;
   private final JTextField field = new JTextField(18);
@@ -159,9 +164,14 @@ final class PrettySearchBar extends JPanel {
       this.refresh();
       return false;
     }
-    SearchResult result = SearchEngine.find(this.textArea, this.context(forward));
-    this.updateStatus(result.getMarkedCount());
-    return result.getMarkedCount() > 0;
+    try {
+      SearchResult result = SearchEngine.find(this.textArea, this.context(forward));
+      this.updateStatus(result.getMarkedCount());
+      return result.getMarkedCount() > 0;
+    } catch (RuntimeException e) {
+      this.showError(e);
+      return false;
+    }
   }
 
   private void refresh() {
@@ -171,8 +181,20 @@ final class PrettySearchBar extends JPanel {
       this.status.setForeground(this.field.getForeground());
       return;
     }
-    SearchResult result = SearchEngine.markAll(this.textArea, this.context(true));
-    this.updateStatus(result.getMarkedCount());
+    try {
+      SearchResult result = SearchEngine.markAll(this.textArea, this.context(true));
+      this.updateStatus(result.getMarkedCount());
+    } catch (RuntimeException e) {
+      this.showError(e);
+    }
+  }
+
+  /** Reports a bad pattern in the bar instead of letting it break the EDT. */
+  private void showError(RuntimeException e) {
+    SearchEngine.markAll(this.textArea, new SearchContext(""));
+    this.status.setText(e instanceof java.util.regex.PatternSyntaxException
+        ? "Bad regex" : "Search failed");
+    this.status.setForeground(NO_MATCH);
   }
 
   private void updateStatus(int count) {
@@ -186,7 +208,14 @@ final class PrettySearchBar extends JPanel {
   }
 
   private SearchContext context(boolean forward) {
-    SearchContext context = new SearchContext(this.field.getText(), forward);
+    // Never evaluate an attacker-sized pattern: open() pre-fills the field from the selection,
+    // which is body text when Ctrl+F follows a select-all. Longer input is still searchable by
+    // its head rather than crashing or backtracking over the whole document.
+    String pattern = this.field.getText();
+    if (pattern.length() > MAX_PATTERN_CHARS) {
+      pattern = pattern.substring(0, MAX_PATTERN_CHARS);
+    }
+    SearchContext context = new SearchContext(pattern, forward);
     context.setMatchCase(this.matchCase.isSelected());
     context.setWholeWord(this.wholeWord.isSelected());
     context.setRegularExpression(this.regex.isSelected());

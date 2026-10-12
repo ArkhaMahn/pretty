@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.zaproxy.zap.extension.prettyview.formatters.PrettyResult;
 import org.zaproxy.zap.extension.prettyview.formatters.UniversalPrettifierManager;
 
@@ -28,8 +29,20 @@ public final class PrettyWorker {
   }
 
   public void submit(String message, String contentType, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
+    this.submit(message, contentType, false, prettifierManager, onResult);
+  }
+
+  /**
+   * Queues one formatting task. Split (Header/Body) views hand over a bare body, which must go
+   * through {@link UniversalPrettifierManager#prettifyBodyMessage}: the whole-message entry point
+   * would file it as headers and report {@code PLAIN_TEXT}.
+   */
+  public void submit(String message, String contentType, boolean bodyOnly, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
+    Supplier<PrettyResult> formatting = bodyOnly
+        ? () -> prettifierManager.prettifyBodyMessage(message, contentType)
+        : () -> prettifierManager.prettifyMessage(message, contentType);
     block3: {
-      PrettyWorkerTask task = new PrettyWorkerTask(message, contentType, prettifierManager, onResult);
+      PrettyWorkerTask task = new PrettyWorkerTask(message, contentType, formatting, onResult);
       PrettyWorkerTask previous = this.current.getAndSet(task);
       if (previous != null) {
         previous.cancel();

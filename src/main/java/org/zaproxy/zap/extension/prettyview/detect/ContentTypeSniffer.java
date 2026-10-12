@@ -25,11 +25,7 @@ public final class ContentTypeSniffer {
   private static final Pattern CSS_BLOCK = Pattern.compile("[^{}]{1,200}\\{[^}]{0,2000}\\}");
   private static final Pattern FORM_PAIR = Pattern.compile("[^&=]+=[^&]*");
   private static final Pattern MARKDOWN_HINT = Pattern.compile("^\\s*(#{1,6}\\s+\\S|```|\\*\\s+\\S|\\d+\\.\\s+\\S)", 8);
-  /** Comments and string literals, removed before the JavaScript signature is looked for. */
-  private static final Pattern JS_COMMENT = Pattern.compile("/\\*.*?\\*/|//[^\\n]*", 8);
-  private static final Pattern JS_STRING = Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`", 8);
-  /**
-   * A JavaScript keyword used as a word, which is the strongest cheap signal that a body is a script.
+  /** A JavaScript keyword used as a word, which is the strongest cheap signal that a body is a script.
    * {@code in} and {@code of} are excluded because CSS values such as {@code ease-in-out} contain
    * them, and a preceding hyphen is excluded so vendor prefixes and hyphenated values cannot match.
    */
@@ -173,7 +169,7 @@ public final class ContentTypeSniffer {
     if (GRAPHQL_SHORTHAND.matcher(probe).find()) {
       return PayloadFormat.GRAPHQL;
     }
-    if (JSON_ARRAY_OR_OBJECT_START.matcher(probe).find() && ContentTypeSniffer.looksLikeJson(window)) {
+    if (ContentTypeSniffer.isJsonStart(window)) {
       return PayloadFormat.JSON;
     }
     if (XML_START.matcher(probe).find()) {
@@ -203,12 +199,62 @@ public final class ContentTypeSniffer {
    * has no keywords, and neither has a CSS declaration block, so neither is captured.
    */
   private static boolean looksLikeJavaScript(String probe) {
-    String bare = JS_STRING.matcher(probe).replaceAll("\"\"");
-    bare = JS_COMMENT.matcher(bare).replaceAll(" ");
+    String bare = ContentTypeSniffer.stripStringsAndComments(probe);
     if (JS_KEYWORD.matcher(bare).find()) {
       return true;
     }
     return bare.contains("=>");
+  }
+
+  /**
+   * Masks string literals and comments with a single space each, so keyword detection cannot be
+   * spoofed by CSS content such as {@code {content:"new"}}.
+   *
+   * <p>This is a linear scanner on purpose. The one-liner regex with a {@code *}-quantified group
+   * over a quoted literal recurses once per character in Java's engine and overflows the stack on a
+   * long quoted run (a base64 value in JSON, for instance), which previously crashed the sniff; no
+   * body content may do that, so nothing here runs a regex over the payload.
+   */
+  private static String stripStringsAndComments(String text) {
+    int n = text.length();
+    StringBuilder bare = new StringBuilder(n);
+    int i = 0;
+    while (i < n) {
+      char c = text.charAt(i);
+      if (c == '/' && i + 1 < n && text.charAt(i + 1) == '*') {
+        int end = text.indexOf("*/", i + 2);
+        i = end < 0 ? n : end + 2;
+        bare.append(' ');
+        continue;
+      }
+      if (c == '/' && i + 1 < n && text.charAt(i + 1) == '/') {
+        int end = text.indexOf('\n', i + 2);
+        i = end < 0 ? n : end;
+        bare.append(' ');
+        continue;
+      }
+      if (c == '"' || c == '\'' || c == '`') {
+        int j = i + 1;
+        while (j < n) {
+          char d = text.charAt(j);
+          if (d == '\\') {
+            j += 2;
+            continue;
+          }
+          if (d == c) {
+            ++j;
+            break;
+          }
+          ++j;
+        }
+        i = j;
+        bare.append(' ');
+        continue;
+      }
+      bare.append(c);
+      ++i;
+    }
+    return bare.toString();
   }
 
   private static PayloadFormat refineWithBody(PayloadFormat declared, String body) {
@@ -216,8 +262,26 @@ public final class ContentTypeSniffer {
     if (declared == PayloadFormat.PLAIN_TEXT && (sniffed = ContentTypeSniffer.fromBody(body)) != PayloadFormat.PLAIN_TEXT) {
       return sniffed;
     }
+    if (declared == PayloadFormat.FORM_URLENCODED && ContentTypeSniffer.opensAsJsonOpener(body)) {
+      // A form content type that turns out to carry a JSON payload is mislabeled, not a form
+      // (Google's telemetry POSTs a JSON array under application/x-www-form-urlencoded). Letting
+      // the form formatter keep it would read the whole array as one value-less field and tag it
+      // "(no value)". A genuine form never opens with '{' or '[': a parameter name beginning with
+      // one would have to be percent-encoded, and so cannot appear as a raw opener. The opener
+      // alone decides rather than requiring a closing brace inside the sniff window, which would
+      // miss a JSON payload whose first value is one very long string. Name-only fields such as
+      // "flag" still keep their form treatment, since they open with a plain word.
+      return PayloadFormat.JSON;
+    }
     if (declared == PayloadFormat.MULTIPART && !body.contains("--")) {
-      return PayloadFormat.PLAIN_TEXT;
+      // A body without a single boundary marker is not a multipart body, only a mislabeled one.
+      // Re-sniff it instead of pinning it to plain text, so a JSON (or any structured) body under
+      // a multipart header still gets the view it actually is. JSON gets the same opener rule as
+      // the form case above, so a closing brace past the sniff window cannot drop it to plain text.
+      if (ContentTypeSniffer.opensAsJsonOpener(body)) {
+        return PayloadFormat.JSON;
+      }
+      return ContentTypeSniffer.fromBody(body);
     }
     return declared;
   }
@@ -253,6 +317,26 @@ public final class ContentTypeSniffer {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Whether the leading window opens as a JSON array or object and the braces later close, which
+   * separates a JSON payload from a name-only form field ("{@code flag}") that begins with a plain
+   * word. Used by body sniffing, where a lone opener is not enough: a JavaScript array literal or a
+   * GraphQL selection set also opens with {@code '['} or {@code '{'}.
+   */
+  private static boolean isJsonStart(String text) {
+    if (!ContentTypeSniffer.opensAsJsonOpener(text)) {
+      return false;
+    }
+    int end = Math.min(text.length(), SNIFF_WINDOW);
+    return ContentTypeSniffer.looksLikeJson(text.substring(0, end));
+  }
+
+  /** Whether the leading window opens with the brace that only a JSON value can start with. */
+  private static boolean opensAsJsonOpener(String text) {
+    int end = Math.min(text.length(), SNIFF_WINDOW);
+    return JSON_ARRAY_OR_OBJECT_START.matcher(text.substring(0, end).trim()).find();
   }
 
   private static boolean isFormUrlEncoded(String probe) {

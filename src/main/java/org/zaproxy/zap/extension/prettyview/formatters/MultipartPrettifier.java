@@ -9,7 +9,14 @@ import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
 public class MultipartPrettifier
 implements PrettyPrettifier {
   private static final int MAX_PARTS = 500;
+  /**
+   * Deepest nesting of {@code multipart/*} inside {@code multipart/*} that is still prettified.
+   * A nested part re-enters this same prettifier through the manager, so crafted nesting would
+   * otherwise recurse until the stack gives out; deeper parts are rendered verbatim instead.
+   */
+  private static final int MAX_NESTING_DEPTH = 5;
   private final UniversalPrettifierManager manager;
+  private int nestingDepth;
 
   public MultipartPrettifier(UniversalPrettifierManager manager) {
     this.manager = manager;
@@ -99,16 +106,24 @@ implements PrettyPrettifier {
     if (trimmed.isEmpty() || this.manager == null) {
       return trimmed.isEmpty() ? "" : trimmed + "\n";
     }
+    if (this.nestingDepth >= MAX_NESTING_DEPTH) {
+      return trimmed + "\n";
+    }
     PayloadFormat format = ContentTypeSniffer.detect(partContentType, trimmed);
-    return MultipartPrettifier.indent(this.manager.prettifyBody(trimmed, partContentType, format));
+    ++this.nestingDepth;
+    try {
+      return MultipartPrettifier.indent(this.manager.prettifyBody(trimmed, partContentType, format));
+    } finally {
+      --this.nestingDepth;
+    }
   }
 
   private static String stripTrailingNewline(String value) {
-    String result = value;
-    while (result.endsWith("\n")) {
-      result = result.substring(0, result.length() - 1);
+    int end = value.length();
+    while (end > 0 && value.charAt(end - 1) == '\n') {
+      --end;
     }
-    return result;
+    return value.substring(0, end);
   }
 
   private static String indent(String text) {

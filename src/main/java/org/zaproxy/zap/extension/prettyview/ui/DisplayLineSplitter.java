@@ -200,6 +200,28 @@ final class DisplayLineSplitter {
       return displayOffset - removed;
     }
 
+    /**
+     * Maps an offset in the formatted text to the matching offset in the display text.
+     *
+     * <p>The inverse of {@link #toOriginalOffset}: every inserted break at or before the offset
+     * shifts it one character forward. Break {@code i} sits before formatted character
+     * {@code b[i] - i}, so breaks are counted while that holds.
+     */
+    int toDisplayOffset(int formattedOffset) {
+      int clamped = Math.max(0, Math.min(formattedOffset, this.originalText.length()));
+      int display = clamped;
+      int seen = 0;
+      for (int offset : this.breakOffsets) {
+        if (offset - seen <= clamped) {
+          ++display;
+          ++seen;
+        } else {
+          break;
+        }
+      }
+      return Math.min(display, this.displayText.length());
+    }
+
     /** The formatted characters a display selection covers. */
     String originalRange(int from, int to) {
       if (from < 0 || to > this.displayText.length() || from >= to) {
@@ -226,22 +248,61 @@ final class DisplayLineSplitter {
      * stop meaning anything once the text around them has changed; an edited body is passed on as typed.
      */
     String toOriginal(String candidate) {
-      if (this.breakOffsets.length == 0 || !this.isDisplayText(candidate)) {
+      if (this.breakOffsets.length == 0) {
         return candidate;
       }
-      if (candidate.length() == this.originalText.length()) {
+      if (this.isDisplayText(candidate)) {
         return this.originalText;
       }
-      StringBuilder out = new StringBuilder(candidate.length());
-      int nextBreak = 0;
-      for (int i = 0; i < candidate.length(); ++i) {
-        if (nextBreak < this.breakOffsets.length && this.breakOffsets[nextBreak] == i) {
-          ++nextBreak;
-          continue;
-        }
-        out.append(candidate.charAt(i));
+      return this.toOriginalEdited(candidate);
+    }
+
+    /**
+     * Maps an edited display text back to formatted coordinates with a prefix/suffix splice.
+     *
+     * <p>The common edit touches one region: the text before it and the text after it still sit where
+     * the split put them, so both ends map through {@link #toOriginalOffset} and the edited middle is
+     * spliced into the original at the mapped span. Synthetic breaks outside the edited region survive
+     * untouched, while the edited middle is kept exactly as typed. When a break offset falls inside the
+     * edited region the mapping is ambiguous and the candidate is returned as typed, which is no worse
+     * than before.
+     */
+    String toOriginalEdited(String candidate) {
+      if (candidate == null) {
+        return "";
       }
-      return out.toString();
+      String display = this.displayText;
+      int maxPrefix = Math.min(display.length(), candidate.length());
+      int prefix = 0;
+      while (prefix < maxPrefix && display.charAt(prefix) == candidate.charAt(prefix)) {
+        ++prefix;
+      }
+      int maxSuffix = Math.min(display.length() - prefix, candidate.length() - prefix);
+      int suffix = 0;
+      while (suffix < maxSuffix
+          && display.charAt(display.length() - 1 - suffix)
+              == candidate.charAt(candidate.length() - 1 - suffix)) {
+        ++suffix;
+      }
+      for (int offset : this.breakOffsets) {
+        if (offset >= prefix && offset < display.length() - suffix) {
+          return candidate;
+        }
+      }
+      int start = this.toOriginalOffset(prefix);
+      int end = this.toOriginalOffset(display.length() - suffix);
+      if (start < 0) {
+        start = 0;
+      }
+      if (end > this.originalText.length()) {
+        end = this.originalText.length();
+      }
+      if (start > end) {
+        return candidate;
+      }
+      return this.originalText.substring(0, start)
+          + candidate.substring(prefix, candidate.length() - suffix)
+          + this.originalText.substring(end);
     }
 
     @Override
