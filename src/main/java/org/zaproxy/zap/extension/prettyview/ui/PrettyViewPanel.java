@@ -14,13 +14,13 @@ import java.awt.event.InputEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
-import javax.swing.JMenuItem;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -48,7 +48,10 @@ extends JPanel {
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
   private DisplayLineSplitter.Split split;
   private CopyAction copyAction;
-  private PrettyMenu popupMenu;
+  /** Shows ZAP's message popup (Attack and friends) when set by the owning view. */
+  private BiConsumer<Integer, Integer> messageActionsShower;
+  /** Whether a message backing the editor is currently available for message actions. */
+  private BooleanSupplier messageActionsAvailable;
 
   public PrettyViewPanel(RSyntaxTextArea textArea) {
     super(new BorderLayout());
@@ -133,17 +136,12 @@ extends JPanel {
   }
 
   /**
-   * Gives the editor the right-click menu ZAP's request and response panels have.
-   *
-   * <p>The menu is rebuilt every time it opens rather than built once. The items are taken from the
-   * editor's own action map, and the copy action in that map is replaced with the split-aware one the
-   * first time a payload is shown; rebuilding on open means the menu always offers whatever is current,
-   * so a right-click Copy hands back the response's characters rather than the editor's inserted line
-   * breaks. Find entries sit alongside the clipboard ones, which is where the search is reached from when
-   * the keyboard shortcut is not known.
+   * Shows ZAP's own message popup on right-click, exactly as the core request and response panels
+   * do: the same menu over the same kind of message container, so the Pretty tabs offer precisely
+   * the options the Text view offers - nothing added, nothing missing. Text actions stay on the
+   * keyboard (Ctrl+X/C/V/F and friends); the mouse menu is ZAP's.
    */
   private void installPopupMenu() {
-    PrettyMenu menu = new PrettyMenu();
     this.textArea.addMouseListener(new MouseAdapter() {
       @Override
       public void mousePressed(MouseEvent event) {
@@ -155,7 +153,6 @@ extends JPanel {
         PrettyViewPanel.this.showPopup(event);
       }
     });
-    this.popupMenu = menu;
   }
 
   private void showPopup(MouseEvent event) {
@@ -168,65 +165,33 @@ extends JPanel {
         this.textArea.setCaretPosition(position);
       }
     }
-    this.popupMenu.show(event.getComponent(), event.getX(), event.getY());
-  }
-
-  private final class PrettyMenu extends JPopupMenu {
-    private static final long serialVersionUID = 1L;
-
-    @Override
-    public void show(Component invoker, int x, int y) {
-      this.populate();
-      super.show(invoker, x, y);
+    BiConsumer<Integer, Integer> shower = this.messageActionsShower;
+    if (shower == null
+        || (this.messageActionsAvailable != null && !this.messageActionsAvailable.getAsBoolean())) {
+      return;
     }
-
-    /** Fills the menu from the editor's current actions; runs each time the menu opens. */
-    private void populate() {
-      this.removeAll();
-      this.add(PrettyViewPanel.this.actionItem("RTA.UndoAction", "Undo"));
-      this.add(PrettyViewPanel.this.actionItem("RTA.RedoAction", "Redo"));
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.actionItem("cut-to-clipboard", "Cut"));
-      this.add(PrettyViewPanel.this.copyItem());
-      this.add(PrettyViewPanel.this.actionItem("paste-from-clipboard", "Paste"));
-      this.add(PrettyViewPanel.this.deleteItem());
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.menuItem("Find...", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), () -> PrettyViewPanel.this.openSearch()));
-      this.add(PrettyViewPanel.this.menuItem("Find Next", KeyStroke.getKeyStroke(KeyEvent.VK_F3, 0), () -> PrettyViewPanel.this.searchBar.findNext()));
-      this.add(PrettyViewPanel.this.menuItem("Find Previous", KeyStroke.getKeyStroke(KeyEvent.VK_F3, InputEvent.SHIFT_DOWN_MASK), () -> PrettyViewPanel.this.searchBar.findPrevious()));
-      this.addSeparator();
-      this.add(PrettyViewPanel.this.actionItem("select-all", "Select All"));
-    }
+    shower.accept(event.getX(), event.getY());
   }
 
-  private JMenuItem actionItem(String actionKey, String label) {
-    Action action = this.textArea.getActionMap().get(actionKey);
-    JMenuItem item = action == null ? new JMenuItem(label) : new JMenuItem(action);
-    item.setText(label);
-    return item;
+  /**
+   * Hands the panel ZAP's message popup, shown directly on right-click.
+   *
+   * <p>Availability is queried on every right-click, so no menu appears while no message backs the
+   * editor.
+   */
+  public void setMessageActions(BooleanSupplier available, BiConsumer<Integer, Integer> shower) {
+    this.messageActionsAvailable = available;
+    this.messageActionsShower = shower;
   }
 
-  private JMenuItem copyItem() {
-    // Deliberately looks "copy" up at open time: it is the split-aware action once a payload is shown.
-    Action action = this.textArea.getActionMap().get(COPY_KEY);
-    JMenuItem item = action == null ? new JMenuItem("Copy") : new JMenuItem(action);
-    item.setText("Copy");
-    return item;
+  /** Walks to the next find hit; the popup's Find Next entry calls this. */
+  boolean findNext() {
+    return this.searchBar.findNext();
   }
 
-  private JMenuItem deleteItem() {
-    JMenuItem item = this.menuItem("Delete", null, () -> this.textArea.replaceSelection(""));
-    item.setEnabled(this.textArea.getSelectionStart() != this.textArea.getSelectionEnd());
-    return item;
-  }
-
-  private JMenuItem menuItem(String text, KeyStroke accelerator, Runnable action) {
-    JMenuItem item = new JMenuItem(text);
-    if (accelerator != null) {
-      item.setAccelerator(accelerator);
-    }
-    item.addActionListener(event -> action.run());
-    return item;
+  /** Walks to the previous find hit; the popup's Find Previous entry calls this. */
+  boolean findPrevious() {
+    return this.searchBar.findPrevious();
   }
 
   /** Ctrl+F opens the find bar, F3 walks the matches, and Escape puts the bar away again. */
@@ -253,7 +218,8 @@ extends JPanel {
     component.getInputMap(JComponent.WHEN_FOCUSED).put(stroke, name);
   }
 
-  private void openSearch() {
+  /** Opens the find bar; the popup's Find entry and Ctrl+F call this. */
+  void openSearch() {
     this.searchBar.open(this.textArea.getSelectedText());
   }
 
@@ -452,6 +418,14 @@ extends JPanel {
     if (this.tickTimer.isRunning()) {
       this.tickTimer.stop();
     }
+  }
+
+  /**
+   * Releases panel resources. Stops the spinner so a detached panel no longer fires every
+   * 150 ms after its view has been unloaded.
+   */
+  public void dispose() {
+    this.stopTicking();
   }
 
   private static void onEdt(Runnable task) {

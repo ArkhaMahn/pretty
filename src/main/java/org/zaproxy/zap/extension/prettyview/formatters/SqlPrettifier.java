@@ -12,6 +12,7 @@ implements PrettyPrettifier {
   private static final Set<String> CLAUSE_KEYWORDS = new HashSet<String>(Arrays.asList("SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "ON", "UNION", "UNION ALL", "INTERSECT", "EXCEPT", "CREATE", "TABLE", "ALTER", "DROP", "INDEX", "VIEW", "TRIGGER", "PROCEDURE", "FUNCTION", "AND", "OR", "RETURNING", "WITH", "CASE", "WHEN", "THEN", "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK", "PRAGMA", "GRANT", "REVOKE"));
   private static final Set<String> LINE_BREAKING = new HashSet<String>(Arrays.asList("SELECT", "FROM", "WHERE", "HAVING", "ORDER", "LIMIT", "OFFSET", "INTO", "VALUES", "SET", "UNION", "UNION ALL", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ON", "RETURNING"));
   private static final Pattern WHITESPACE_RUN = Pattern.compile("[\\s]+");
+  private static final Pattern TRAILING_SPACES = Pattern.compile("[ \\t]+\n");
 
   @Override
   public PrettyPrettifier.SupportedFormat getSupportedFormat() {
@@ -72,7 +73,7 @@ implements PrettyPrettifier {
       }
       index = wordEnd;
     }
-    return out.toString().replaceAll("[ \\t]+\n", "\n").trim() + "\n";
+    return TRAILING_SPACES.matcher(out.toString()).replaceAll("\n").trim() + "\n";
   }
 
   private static void appendKeyword(StringBuilder out, String keyword, int depth, boolean newLine) {

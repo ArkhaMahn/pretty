@@ -1,5 +1,7 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -16,6 +18,13 @@ implements PrettyPrettifier {
   private static final int INDENT_AMOUNT = PrettyPrettifier.INDENT_WIDTH;
   private static final Pattern EMBEDDED_TAG = Pattern.compile("<(/?)(script|style|pre|textarea|template)([^>]*?)(/?)>", Pattern.CASE_INSENSITIVE);
   private static final Pattern CLOSING_TAG = Pattern.compile("</\\s*(script|style)\\s*>", Pattern.CASE_INSENSITIVE);
+  private static final Pattern DOCTYPE_DECLARATION = Pattern.compile("<!doctype[^>]*>", Pattern.CASE_INSENSITIVE);
+  /**
+   * Deepest element nesting that is still pretty-printed. jsoup indents every level, so tens of
+   * thousands of nested tags unfold into hundreds of megabytes of padding; past this the document
+   * goes back verbatim. Real pages nest far shallower.
+   */
+  private static final int MAX_ELEMENT_DEPTH = 256;
   private final JavaScriptPrettifier jsPrettifier = new JavaScriptPrettifier();
   private final CssPrettifier cssPrettifier = new CssPrettifier();
 
@@ -30,9 +39,31 @@ implements PrettyPrettifier {
       throw new PrettificationException("Empty HTML payload");
     }
     Document document = HtmlPrettifier.parse(body);
+    if (HtmlPrettifier.elementDepth(document) > MAX_ELEMENT_DEPTH) {
+      throw new PrettificationException("Markup nests too deeply; rendered verbatim");
+    }
     this.formatEmbeddedCode(document);
     document.outputSettings().prettyPrint(true).indentAmount(INDENT_AMOUNT).escapeMode(Entities.EscapeMode.base).maxPaddingWidth(-1);
-    return HtmlPrettifier.indentEmbeddedBlocks(document.outerHtml(), INDENT_AMOUNT);
+    return HtmlPrettifier.restoreDoctype(body,
+        HtmlPrettifier.indentEmbeddedBlocks(document.outerHtml(), INDENT_AMOUNT));
+  }
+
+  /**
+   * Puts the input's own doctype declaration back onto the output. jsoup lowercases it on the way
+   * through (so {@code <!DOCTYPE html>} comes back {@code <!doctype html>}), which is harmless to a
+   * browser but needlessly changes the bytes a save would write back.
+   */
+  private static String restoreDoctype(String original, String formatted) {
+    Matcher input = HtmlPrettifier.DOCTYPE_DECLARATION.matcher(original);
+    if (!input.find()) {
+      return formatted;
+    }
+    Matcher output = HtmlPrettifier.DOCTYPE_DECLARATION.matcher(formatted);
+    if (!output.find() || input.group().equals(output.group())
+        || !formatted.substring(0, output.start()).trim().isEmpty()) {
+      return formatted;
+    }
+    return input.group() + formatted.substring(output.end());
   }
 
   private static Document parse(String body) throws PrettificationException {
@@ -53,12 +84,50 @@ implements PrettyPrettifier {
   private void formatEmbeddedCode(Document document) {
     for (Element script : document.select("script")) {
       if (!HtmlPrettifier.isInline(script) || HtmlPrettifier.isWhitespaceSensitive(script)) continue;
-      HtmlPrettifier.rewriteData(script, HtmlPrettifier.blockBody(this.jsPrettifier.prettify(script.data())));
+      try {
+        HtmlPrettifier.rewriteData(script, HtmlPrettifier.blockBody(this.jsPrettifier.prettify(script.data())));
+      } catch (PrettificationException e) {
+        // One pathological block must not cost the whole page its formatting; the tag keeps
+        // whatever jsoup parsed out of it.
+      }
     }
     for (Element style : document.select("style")) {
       if (HtmlPrettifier.isWhitespaceSensitive(style)) continue;
-      HtmlPrettifier.rewriteData(style, HtmlPrettifier.blockBody(this.cssPrettifier.prettify(style.data())));
+      try {
+        HtmlPrettifier.rewriteData(style, HtmlPrettifier.blockBody(this.cssPrettifier.prettify(style.data())));
+      } catch (PrettificationException e) {
+        // As above: leave this block alone rather than failing the page.
+      }
     }
+  }
+
+  /**
+   * Deepest element nesting under {@code root}, walked iteratively so even adversarial markup
+   * cannot overflow the stack getting here.
+   */
+  private static int elementDepth(Node root) {
+    Deque<Node> nodes = new ArrayDeque<Node>();
+    Deque<Integer> depths = new ArrayDeque<Integer>();
+    nodes.push(root);
+    depths.push(Integer.valueOf(0));
+    int deepest = 0;
+    while (!nodes.isEmpty()) {
+      Node node = nodes.pop();
+      int depth = depths.pop().intValue();
+      if (depth > deepest) {
+        deepest = depth;
+        if (deepest > MAX_ELEMENT_DEPTH) {
+          return deepest;
+        }
+      }
+      for (Node child : node.childNodes()) {
+        if (child instanceof Element) {
+          nodes.push(child);
+          depths.push(Integer.valueOf(depth + 1));
+        }
+      }
+    }
+    return deepest;
   }
 
   /**
@@ -99,18 +168,21 @@ implements PrettyPrettifier {
           out.append(trimmed);
         }
         else {
+          // Padding is capped: embeddedAt is an attacker-controlled column and a crafted
+          // long-indent line must not allocate megabytes of spaces per embedded line.
+          int pad = Math.min(embeddedAt, PrettyPrettifier.MAX_INDENT_DEPTH * PrettyPrettifier.INDENT_WIDTH);
           Matcher close = HtmlPrettifier.CLOSING_TAG.matcher(trimmed);
           if (!close.find()) {
             // Keep the embedded code's own relative indentation, one level in from its tag.
-            out.append(" ".repeat(embeddedAt + width)).append(line);
+            out.append(" ".repeat(pad + width)).append(line);
           }
           else if (close.start() == 0) {
-            out.append(" ".repeat(embeddedAt)).append(trimmed);
+            out.append(" ".repeat(pad)).append(trimmed);
           }
           else {
             int cut = line.length() - trimmed.length() + close.start();
-            out.append(" ".repeat(embeddedAt + width)).append(line, 0, cut);
-            out.append('\n').append(" ".repeat(embeddedAt)).append(line, cut, line.length());
+            out.append(" ".repeat(pad + width)).append(line, 0, cut);
+            out.append('\n').append(" ".repeat(pad)).append(line, cut, line.length());
             embeddedAt = -1;
           }
         }

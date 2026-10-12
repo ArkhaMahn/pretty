@@ -4,7 +4,14 @@ import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
 
 public final class LargePayloadPolicy {
-  public static final int SYNTAX_OFF_LIMIT_CHARS = 0x500000;
+  /**
+   * Formatted size past which highlighting is dropped. Ten megabytes covers what a 2.5 MB
+   * minified JSON payload unfolds into (~9 MB over ~380 k lines, measured live with stable
+   * paints); past that the token heap for millions of tokens is not worth the colours, and the
+   * view renders plain instead. Asked of the formatted text, whose expansion is what actually
+   * gets tokenized - not of the raw body.
+   */
+  public static final int SYNTAX_OFF_LIMIT_CHARS = 0xA00000;
   /** Past this longest line, wrapping stops looking on word boundaries. See {@link #shouldWrap}. */
   public static final int MAX_WORD_WRAP_LINE_CHARS = 20000;
   /**

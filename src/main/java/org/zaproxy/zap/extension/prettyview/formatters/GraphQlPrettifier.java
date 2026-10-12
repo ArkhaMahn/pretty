@@ -95,13 +95,17 @@ implements PrettyPrettifier {
     return value.getAsString();
   }
 
-  private static String formatOperation(String operation) {
+  private static String formatOperation(String operation) throws PrettificationException {
     StringBuilder out = new StringBuilder(operation.length() + operation.length() / 3 + 16);
     int length = operation.length();
     int depth = 0;
     int index = 0;
     Matcher strings = STRING.matcher(operation);
     while (index < length) {
+      if (out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+        throw new PrettificationException(
+            "GraphQL output exceeded its size cap; rendered verbatim");
+      }
       char c = operation.charAt(index);
       if (c == '\"') {
         strings.region(index, length);
@@ -176,7 +180,8 @@ implements PrettyPrettifier {
       return;
     }
     out.append('\n');
-    for (int i = 0; i < depth; ++i) {
+    int drawn = Math.min(depth, PrettyPrettifier.MAX_INDENT_DEPTH);
+    for (int i = 0; i < drawn; ++i) {
       out.append(PrettyPrettifier.INDENT);
     }
   }

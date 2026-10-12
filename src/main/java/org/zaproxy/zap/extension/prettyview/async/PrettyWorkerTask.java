@@ -51,6 +51,10 @@ implements Runnable {
     }
     finally {
       this.workerThread = null;
+      // A cancelled task may have been interrupted while doing no blocking work, which leaves the
+      // flag set on the pooled single thread for the next task. Clearing here keeps the reuse
+      // clean if a future formatter ever blocks.
+      Thread.interrupted();
     }
   }
 

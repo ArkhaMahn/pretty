@@ -8,7 +8,7 @@ implements PrettyPrettifier {
   }
 
   @Override
-  public String prettify(String body) {
+  public String prettify(String body) throws PrettificationException {
     if (body == null || body.trim().isEmpty()) {
       return body == null ? "" : body;
     }
@@ -33,9 +33,13 @@ implements PrettyPrettifier {
       this.out = new StringBuilder(Math.max(256, capacity + capacity / 4 + 64));
     }
 
-    String run(String body) {
+    String run(String body) throws PrettificationException {
       int length = body.length();
       block11: for (int i = 0; i < length; ++i) {
+        if (this.out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+          throw new PrettificationException(
+              "CSS output exceeded its size cap; rendered verbatim");
+        }
         char next;
         char c = body.charAt(i);
         char c2 = next = i + 1 < length ? body.charAt(i + 1) : (char)'\u0000';
@@ -249,7 +253,8 @@ implements PrettyPrettifier {
       if (this.line.length() == 0) {
         return;
       }
-      for (int i = 0; i < this.indent; ++i) {
+      int depth = Math.min(this.indent, PrettyPrettifier.MAX_INDENT_DEPTH);
+      for (int i = 0; i < depth; ++i) {
         this.out.append(PrettyPrettifier.INDENT);
       }
       this.out.append((CharSequence)this.line).append('\n');

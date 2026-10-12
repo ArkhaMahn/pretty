@@ -3,6 +3,8 @@ package org.zaproxy.zap.extension.prettyview.formatters;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.regex.Pattern;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -20,6 +22,12 @@ public class XmlPrettifier
 implements PrettyPrettifier {
   private static final String INDENT_AMOUNT = Integer.toString(PrettyPrettifier.INDENT_WIDTH);
   private static final Pattern ENTITY_DECLARATION = Pattern.compile("<!\\s*ENTITY", 2);
+  /**
+   * Deepest element nesting that is still pretty-printed. The serializer indents every level, so
+   * pathological nesting unfolds into hundreds of megabytes; data XML legitimately nests deeper
+   * than HTML, hence the roomier budget, and anything past it goes back verbatim.
+   */
+  private static final int MAX_ELEMENT_DEPTH = 1024;
 
   @Override
   public PrettyPrettifier.SupportedFormat getSupportedFormat() {
@@ -35,6 +43,9 @@ implements PrettyPrettifier {
       throw new PrettificationException("XML declares internal entities; rendered verbatim to avoid resolving them");
     }
     Document document = XmlPrettifier.parse(body);
+    if (XmlPrettifier.elementDepth(document.getDocumentElement()) > MAX_ELEMENT_DEPTH) {
+      throw new PrettificationException("XML nests too deeply; rendered verbatim");
+    }
     String formatted = XmlPrettifier.transform(document);
     if (formatted == null || formatted.trim().isEmpty()) {
       throw new PrettificationException("XML transformation produced no output");
@@ -82,6 +93,37 @@ implements PrettyPrettifier {
     catch (IllegalArgumentException | TransformerException e) {
       throw new PrettificationException("Unable to format XML: " + XmlPrettifier.describe(e), e);
     }
+  }
+
+  /**
+   * Deepest element nesting under {@code root}, walked iteratively so adversarial input cannot
+   * overflow the stack getting here.
+   */
+  private static int elementDepth(org.w3c.dom.Node root) {
+    Deque<org.w3c.dom.Node> nodes = new ArrayDeque<org.w3c.dom.Node>();
+    Deque<Integer> depths = new ArrayDeque<Integer>();
+    nodes.push(root);
+    depths.push(Integer.valueOf(0));
+    int deepest = 0;
+    while (!nodes.isEmpty()) {
+      org.w3c.dom.Node node = nodes.pop();
+      int depth = depths.pop().intValue();
+      if (depth > deepest) {
+        deepest = depth;
+        if (deepest > MAX_ELEMENT_DEPTH) {
+          return deepest;
+        }
+      }
+      org.w3c.dom.NodeList children = node.getChildNodes();
+      for (int i = 0; i < children.getLength(); ++i) {
+        org.w3c.dom.Node child = children.item(i);
+        if (child.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {
+          nodes.push(child);
+          depths.push(Integer.valueOf(depth + 1));
+        }
+      }
+    }
+    return deepest;
   }
 
   private static String describe(Exception e) {

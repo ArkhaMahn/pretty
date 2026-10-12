@@ -22,14 +22,14 @@ plain text.
 
 ### Behaviour worth knowing
 
-- **The view opens at the top.** A large response is streamed in as chunks appended at the end of the
-  document, and Swing scrolls to the caret — so the viewport used to be dragged down with every chunk
-  until it sat at the bottom of the prettified response. `ChunkedTextLoader` now freezes the caret's
-  update policy for the duration of a load and calls back after every chunk; `PrettyViewPanel.pinToTop`
-  returns the caret to offset 0 and the scrollbar to 0 each time. Only a genuine gesture — dragging the
+- **The view opens at the top.** A large response used to be streamed into the live document in
+  chunks appended at the end, and Swing scrolls to the caret — so the viewport used to be dragged down
+  with every chunk until it sat at the bottom of the prettified response. The document is now built
+  detached on the worker thread and swapped in once (`ChunkedTextLoader.buildDocument` /
+  `installDocument`), so there is no streaming caret to chase; `PrettyViewPanel.pinToTop` puts the
+  caret at offset 0 and the scrollbar at 0 on arrival. Only a genuine gesture — dragging the
   scrollbar, the mouse wheel, a click in the body, or a keystroke — counts as the user taking over, after
-  which the view is left alone. Watching the caret position or the scrollbar value instead would not work:
-  the loader's own appends move both, so the pin would disable itself on the first chunk.
+  which the view is left alone.
   Asserted by `/tmp/opencode/verify/Verify9.java` and `/tmp/opencode/verify/Verify10.java`, the latter
   driving the real loader rather than a stand-in.
 - **Large payload policy** (`LargePayloadPolicy`) — bodies over `0x500000` chars (5 MB) are rendered
@@ -37,7 +37,11 @@ plain text.
   at any character rather than on word boundaries, so a minified single-line payload or a React/Next.js
   hydration blob cannot make the editor hunt for word breaks that do not exist. Line limits are asked of
   the split text the editor actually receives, so in practice over-long payloads wrap on word boundaries and
-  keep their highlighting.
+  keep their highlighting. Highlighting itself is dropped past 10 MB of *formatted* text
+  (`SYNTAX_OFF_LIMIT_CHARS`) — a 2.5 MB minified JSON body unfolds to ~9 MB over ~380 k lines, and
+  that still highlights smoothly — and a formatted result past 12 MB (`MAX_FORMATTED_CHARS`) goes
+  back verbatim through the same fast path, so runaway expansion can never build an unholdable
+  document no matter what the input size was.
 - **Anti-aliasing is always on** (`LargePayloadPolicy.applyForSize`). It used to be disabled past 512 KB,
   which meant a payload's size changed how its glyphs were drawn, so the same font read as a different one
   over long responses — rendering the same characters with only that flag set differs pixel for pixel. The
@@ -51,14 +55,16 @@ plain text.
   12 581 px of ink against 27 517 px for the same characters wrapped — most of the visible line was simply
   absent, which is what reads on screen as garbled text. Wrapping is what keeps the preferred width at the
   viewport's (611 px here) and paints every character.
-- **Wrapping is never touched while a body streams in** (`ChunkedTextLoader.load`). It used to be switched
-  off for the duration and put back when the load finished, to save re-laying out the line every chunk
-  lands on; that trade has been dropped because the editor no longer sees long logical lines. The text is
-  handed over already broken into display lines no longer than `DisplayLineSplitter.MAX_CHUNK_CHARS`, so a
-  landing chunk only re-wraps the short line it ends in and the saving is no longer there to be had.
-  Turning wrapping back on at the end, meanwhile, re-flowed the whole document in one visible jump exactly
-  as loading finished — the payload looked one way while it arrived and another once it stopped. Leaving
-  wrapping alone means the body is drawn the same from the first chunk to the last.
+- **Large documents load without blocking the UI** (`ChunkedTextLoader.buildDocument` /
+  `installDocument`). Appending to the *attached* document re-lays-out the whole view on every chunk —
+  88 twelve-kilobyte chunks of a 1 MB payload cost ~10 s on the EDT against ~0.5 s for the same
+  characters in one document, because each chunk pays a full re-layout of everything inserted so far.
+  The document is therefore built detached on the worker thread (tokenized as it goes, abandoned at
+  the next slice boundary if superseded) and swapped in with one layout pass (~35 ms for the same
+  payload). Wrapping stays on throughout: the text arrives already broken into display lines no longer
+  than `DisplayLineSplitter.MAX_CHUNK_CHARS`, so what lands is final — no re-flow jump at the end.
+  A side benefit of the swap is that a load never lands in undo history.
+  Measured by `/tmp/opencode/verify/LoadPaintProbe.java` and `/tmp/opencode/verify/EndToEndLoad.java`.
 - **The editor follows ZAP's light/dark look and feel** (`EditorTheme.palette`, `PrettySyntaxScheme`). The
   panel used to be hardwired to a dark palette, so in a light ZAP the editor was a dark rectangle inside a
   white window, and its token colours were chosen against the wrong background. The palette is now read
@@ -90,12 +96,22 @@ plain text.
 - **The message can be searched in place** (`PrettySearchBar`, `PrettyViewPanel` context menu). Ctrl+F
   opens a find bar above the editor — pre-filled from the selection — with match-case, whole-word and
   regular-expression toggles, a live match count, and prev/next buttons; Enter and Shift+Enter walk the
-  matches and Escape or the close button puts the bar away and clears its highlights. The same search is
-  on the editor's right-click menu, alongside Undo / Redo / Cut / Copy / Paste / Delete / Select All, which
-  the menu takes from the editor's own action map and rebuilds each time it opens, so its Copy is the
-  split-aware copy the Pretty view installs rather than RSTA's default. ZAP's request and response views
+  matches and Escape or the close button puts the bar away and clears its highlights. ZAP's request and response views
   put their search where the message is, so this is the same idea brought into the Pretty view, and it is
-  backed by RSTA's own `SearchEngine` rather than a second implementation.
+  backed by RSTA's own `SearchEngine` rather than a second implementation. The view also implements
+  ZAP's `SearchableHttpPanelView`, so the global Search tab finds hits in Pretty tabs too: `search`
+  maps display hits back through the split into header/body-relative offsets, and `highlight` selects
+  them in the editor.
+- **One flat right-click menu, text actions first** (`PrettyTextPopupItem`). Right-clicking a Pretty
+  editor opens ZAP's own message popup — Attack, Find, run, invoke and everything else, exactly as on
+  the core panels — headed by the text actions (Undo / Redo / Cut / Copy / Paste / Delete, the same
+  Find entries, Select All). The entries are registered once as `ExtensionPopupMenuItem`s; ZAP lays its
+  menu out in descending weight order with everything defaulting to 1000, so the block carries weights
+  just above that, descending within itself to hold its order. Each entry only shows while the click
+  landed in a Pretty editor, so no other popup in ZAP changes, and nothing holds a view — the click
+  target is captured fresh on every show. Copy resolves the action map at click time, so it is the
+  split-aware copy that hands back the message's characters rather than the editor's inserted line
+  breaks. Asserted by `/tmp/opencode/verify/TextPopupVerify.java`.
 - **Over-long lines are broken at 2 000-character boundaries, held back to 4 000 while a string or a
   comment is open** (`DisplayLineSplitter.copyChunked`). Wrapping alone is not enough to keep scrolling
   smooth, because the editor wraps by handing the whole logical line to a layout view and redoing that
@@ -148,17 +164,51 @@ plain text.
   (`PrettyDefaultViewSelector`). ZAP sorts its default view selectors by order ascending and opens the first
   one that matches, so the position matters: ZAP ships an image selector at 20 and large request and
   response selectors at 50, and this one sits at 30. That is above the image selector, so an image response
-  still opens in the image view instead of being prettified as if it were text, and below the large body
-  selectors, so Pretty wins for an ordinary payload no matter how big. Asserted by
-  `/tmp/opencode/verify/Selector.java`.
+  still opens in the image view instead of being prettified as if it were text,   and below the large body
+  selectors, so Pretty wins for an ordinary payload no matter how big. Empty selections match too — a
+  Sites node rather than a link opens the empty Pretty tab instead of dropping back to Text — and the
+  view reports itself enabled with no message so ZAP keeps it in the tab list. Asserted by
+  `/tmp/opencode/verify/Selector.java` and `/tmp/opencode/verify/EmptyStateVerify.java`.
+- **A chosen tab sticks** (`ViewChoiceTracker`, `ViewChoiceMemory`). ZAP re-selects the default view on
+  every message, which would drag the tab back to Pretty on every click after another view was picked.
+  The add-on watches tab switches on the main request and response panels: picking a non-Pretty tab
+  stands the default claim down for that side until Pretty is picked again, so the chosen tab survives
+  further clicks. Only genuine choices count — switches with no message showing, or to messages Pretty
+  would never claim (over-threshold bodies, non-HTTP messages), change nothing — and switches on panels
+  outside the main window are ignored. Asserted by
+  `/tmp/opencode/verify/ChoiceMemoryVerify.java` (14 checks).
 - **A body past the prettify threshold switches to the text view** (`PrettyDefaultViewSelector`). Past
   `PrettifyThreshold`'s 5 MB the add-on stops prettifying and hands the body back verbatim, so there is
   nothing left for it to offer and the selector declines the message instead; ZAP's own large body selector
   then matches and the panel opens in its plain text view. The selector and the prettifier are held to the
   same boundary, so Pretty is the default exactly when it has something to prettify — a body of exactly
   5 MB still prettifies and still opens in Pretty, and one byte more does not.
-- **Chunked loading** (`ChunkedTextLoader`) keeps the notice bar responsive while the document streams in.
+- **Background document build** (`ChunkedTextLoader`) keeps the notice bar responsive while a large
+  document is assembled off the EDT and swapped in once.
 - **Write-back** (`PrettyWriteBack`) pushes edits made in the Pretty tab back to the underlying message.
+  Editing matches the core panels: the flag the host panel passes is honoured rather than forced, so the
+  main-window request and response tabs are read-only and only the Manual Request Editor's request accepts
+  edits and writes back. Responses are never written back. And only formats that survive a save
+  semantically intact stay editable (JSON, GraphQL, HTML, XML, CSS, JavaScript, SQL — whitespace, case
+  and entity spelling only); form, multipart, CSV and plain text render decorations the wire format has
+  no room for, so those views are display-only with a tooltip saying so, never dirty, and their saves
+  are refused.
+- **JavaScript comment and template fidelity** (`JavaScriptPrettifier`). Every `//` comment used to gain
+  a slash on the way through (`///`), including ones inside template literals, and nested templates
+  (`` `a${`b${c}d`}e` ``) flipped template/code parity for the rest of the file; both corrupted the bytes
+  a later save would write. Comment openers now emit one slash and let the loop append the second in its
+  new state, and `${` pushes the brace depth on a stack whose matching `}` re-enters the template
+  instead of closing a block. HTML keeps the input's own doctype declaration rather than jsoup's
+  lowercased one. Asserted byte-exact (modulo whitespace) on real-world bundles by
+  `/tmp/opencode/verify/FidelityProbe.java`; HTML is compared case-insensitively because jsoup
+  lowercases tag and attribute names, which browsers read identically.
+- **Nesting and output caps** (`PrettyPrettifier.MAX_OUTPUT_CHARS`, per-format depth guards). Indentation
+  multiplies per nesting level, so a few hundred kilobytes of braces or tags used to unfold into tens of
+  megabytes of padding (200 KB of `{` made a 51 MB document). The hand-rolled indenters bail past 8 MB of
+  output, HTML past 256 element levels and XML past 1024 (walked iteratively, so the walk itself cannot
+  overflow); all three degrade to the verbatim body. One pathological embedded block no longer costs the
+  whole page either — `HtmlPrettifier` formats each inline script/style on its own and leaves the tag
+  alone when that one fails.
 - **Fail-open everywhere** — every prettifier failure is caught and the raw body is shown instead;
   detection and formatting never block the panel.
 - **Four-space indentation** — every prettifier emits four spaces per level, and never a tab. The unit

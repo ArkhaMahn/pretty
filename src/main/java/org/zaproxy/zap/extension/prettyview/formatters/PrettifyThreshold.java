@@ -29,6 +29,10 @@ public final class PrettifyThreshold {
     return "payload of " + PrettifyThreshold.toKilobytes(length) + " KB exceeds the " + PrettifyThreshold.toKilobytes(this.thresholdChars) + " KB prettify threshold; showing the fast raw view";
   }
 
+  public String formattedExceededNote(int length) {
+    return "formatted output of " + PrettifyThreshold.toKilobytes(length) + " KB is too large to hold highlighted; showing the fast raw view";
+  }
+
   private static String toKilobytes(int length) {
     return String.format(Locale.ROOT, "%.1f", (double)length / 1024.0);
   }
