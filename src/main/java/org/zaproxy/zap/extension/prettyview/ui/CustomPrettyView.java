@@ -606,10 +606,7 @@ SearchableHttpPanelView {
     if (!inEditor && this.request) {
       editable = false;
     } else if (inEditor && this.request) {
-      // In editors, keep request editable as before
-      if (!editable) {
-        editable = true;
-      }
+      editable = true;
     }
     // Response views follow host as before (not modified)
     this.editable = editable;
