@@ -10,6 +10,9 @@ import javax.swing.JComponent;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.text.BadLocationException;
+import java.awt.*;
+import java.awt.Window;
+import java.awt.Container;
 import org.apache.commons.configuration.FileConfiguration;
 import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
@@ -525,8 +528,8 @@ SearchableHttpPanelView {
       java.awt.Container p = this.panel.getParent();
       while (p != null) {
         if (p instanceof java.awt.Window) {
-          String title = ((java.awt.Window) p).getTitle();
-          if (title != null && (title.contains("Manual Request Editor") || title.contains("Requester"))) {
+          java.awt.Window w = (java.awt.Window) p;
+          if (w instanceof javax.swing.JDialog || w.getClass().getName().contains("Manual") || w.getClass().getName().contains("Requester")) {
             return true;
           }
         }
@@ -544,9 +547,9 @@ SearchableHttpPanelView {
         java.awt.Container pp = parent;
         while (pp != null) {
           if (pp instanceof java.awt.Window) {
-            String title = ((java.awt.Window) pp).getTitle();
-            if (title != null && (title.contains("Manual Request Editor") || title.contains("Requester"))) {
-              return hostEditable || true;
+            java.awt.Window w = (java.awt.Window) pp;
+            if (w.getClass().getName().contains("ManualRequest") || w.getClass().getName().contains("Requester")) {
+              return true;
             }
           }
           pp = pp.getParent();
