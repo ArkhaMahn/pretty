@@ -177,11 +177,11 @@ SearchableHttpPanelView {
       // detector can only report PLAIN_TEXT for it.
       this.bodyEmpty = parts.getBody().isEmpty();
     }
-    if (this.request && this.isEditable()) {
-      // Edit/write mode (Manual Request Editor, Requester): show the raw wire bytes, never
-      // prettified. Probes are often deliberately malformed to test server responses, and any
-      // reformatting would mangle them - both on display and, worse, in save(), which persists
-      // the display text. Read-only views and all responses keep prettifying below.
+    if (this.isEditable()) {
+      // Edit/write mode (Manual Request Editor, Requester, Break): show the raw wire bytes,
+      // never prettified. Probes are often deliberately malformed to test peer responses, and
+      // any reformatting would mangle them - both on display and, worse, in save(), which
+      // persists the display text. Read-only views keep prettifying below.
       this.applyRawOnEdt(ticket, raw, contentType);
       return;
     }
@@ -392,9 +392,9 @@ SearchableHttpPanelView {
     // Form posts take a dedicated path, but only outside raw mode: the prettified display is
     // decoded and annotated, so it is strictly re-parsed and re-encoded instead of persisted
     // raw. Anything unparseable (truncation notes, multiline values, free text) refuses the save
-    // and the message is left untouched. In raw mode (editable requests) the display already is
+    // and the message is left untouched. In raw mode (any editable view) the display already is
     // the wire bytes, so it saves through the plain path below like every other format.
-    if (this.format == PayloadFormat.FORM_URLENCODED && !(this.request && this.isEditable())) {
+    if (this.format == PayloadFormat.FORM_URLENCODED && !this.isEditable()) {
       if (this.model.setFormData(current)) {
         this.lastFormatted = current;
       }
@@ -409,8 +409,8 @@ SearchableHttpPanelView {
 
   /**
    * Whether the user may edit the loaded message here. Follows the host panel like every core
-   * view: editable in the Manual Request Editor and Requester, read-only in the main viewer.
-   * Every format is editable, including decorated ones - what is shown is what gets sent.
+   * view: editable in the Manual Request Editor, Requester and Break, read-only in the main
+   * viewer. Every format is editable, including decorated ones - what is shown is what gets sent.
    */
   private boolean allowsEdits() {
     return this.isEditable();
@@ -532,9 +532,9 @@ SearchableHttpPanelView {
 
   @Override
   public boolean isEditable() {
-    // Follow the host panel like every core view: editable in the Manual Request Editor and
-    // Requester, read-only in the main viewer. Falls back to the host flag when setEditable
-    // has not been pushed yet.
+    // Follow the host panel like every core view: editable in the Manual Request Editor,
+    // Requester and Break, read-only in the main viewer. Falls back to the host flag when
+    // setEditable has not been pushed yet.
     if (this.editable) {
       return true;
     }
@@ -550,10 +550,16 @@ SearchableHttpPanelView {
 
   @Override
   public void setEditable(boolean editable) {
-    // Follow the host panel like every core view; see isEditable.
+    // Follow the host panel like every core view; see isEditable. When the effective mode
+    // flips (e.g. a Break panel becoming editable around a trapped message), re-render so the
+    // raw/prettified mode matches: raw while editable, prettified while read-only.
+    boolean wasEditable = this.isEditable();
     this.editable = editable;
     if (!this.loading) {
       this.panel.setEditable(this.allowsEdits());
+    }
+    if (wasEditable != this.isEditable() && this.model.getMessage() != null) {
+      this.scheduleRefresh();
     }
   }
 
