@@ -553,6 +553,9 @@ SearchableHttpPanelView {
     if (this.request && !inEditor) {
       return false;
     }
+    if (this.request && inEditor) {
+      return true;
+    }
     if (this.editable) {
       return true;
     }
