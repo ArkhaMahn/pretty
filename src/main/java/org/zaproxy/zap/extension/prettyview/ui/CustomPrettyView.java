@@ -161,7 +161,11 @@ SearchableHttpPanelView {
           .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
     }
     LargePayloadPolicy.applyBaseline(area);
-    area.setEditable(false);
+    if (!(this.request && (this.bodyOnly || this.headerOnly))) {
+      area.setEditable(false);
+    } else {
+      area.setEditable(true);
+    }
     area.setText("");
     EditorTheme.apply(area, null, EditorTheme.palette());
     return area;
