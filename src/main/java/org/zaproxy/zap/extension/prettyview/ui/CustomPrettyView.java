@@ -531,30 +531,24 @@ SearchableHttpPanelView {
 
   @Override
   public boolean isEditable() {
-    // Check editor context
-    boolean inEditor = false;
-    // Split parts are typically used by editors (MRE/Requester)
+    // Split request parts (body/header) are used by editors - always editable
     if (this.request && (this.bodyOnly || this.headerOnly)) {
-      inEditor = true;
+      return true;
     }
+    // Check editor context for other cases
+    boolean inEditor = false;
     java.awt.Container check = this.panel.getParent();
     while (check != null) {
       String cname = check.getClass().getName();
       String name = check.getName();
-      if (cname.contains("Manual") || cname.contains("manual") || (cname.contains("Request") && (cname.contains("Editor") || cname.contains("er"))) || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend") || cname.contains("addon.requester") || cname.contains("org.zaproxy.addon.requester") || cname.contains("MessageEditorDialog") || cname.contains("RequesterPanel") || cname.contains("requester-panel") || cname.contains("CustomHttpPanelRequest") || cname.contains("HttpPanelSender") || (name != null && (name.toLowerCase().contains("requester") || name.toLowerCase().contains("manual") || name.toLowerCase().contains("editor")))) {
+      if (cname.contains("Manual") || cname.contains("requester") || cname.contains("Requester") || cname.contains("Editor") || cname.contains("addon.requester") || cname.contains("MessageEditor") || (name != null && name.toLowerCase().contains("requester"))) {
         inEditor = true;
         break;
-      }
-      if (check instanceof java.awt.Window) {
-        // also keep window check
       }
       check = check.getParent();
     }
     if (this.request && !inEditor) {
       return false;
-    }
-    if (this.request && inEditor) {
-      return true;
     }
     if (this.editable) {
       return true;
