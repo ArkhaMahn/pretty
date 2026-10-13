@@ -105,7 +105,7 @@ SearchableHttpPanelView {
     // Detect if in editor/requester context (Manual Request Editor or Requester)
     boolean inEditor = false;
     // Can't check parent yet as panel not created; but we'll be called from UI - alternatively, rely on setEditable called by host
-    // For now, follow original behavior; actual enforcement in setEditable/isEditable
+    
     this.editable = request;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
@@ -529,7 +529,7 @@ SearchableHttpPanelView {
     while (check != null) {
       if (check instanceof java.awt.Window) {
         String cname = check.getClass().getName();
-        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("ManualRequestEditor")) {
+        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("RequestEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor")) {
           inEditor = true;
           break;
         }
@@ -576,7 +576,7 @@ SearchableHttpPanelView {
     while (pp != null) {
       if (pp instanceof java.awt.Window) {
         String cname = pp.getClass().getName();
-        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("ManualRequestEditor")) {
+        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("RequestEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor")) {
           inEditor = true;
           break;
         }
