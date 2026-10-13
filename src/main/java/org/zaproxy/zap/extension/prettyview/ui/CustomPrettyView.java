@@ -263,7 +263,12 @@ SearchableHttpPanelView {
       }
       this.lastFormatted = split.displayText();
       this.loading = false;
-      this.panel.setEditable(this.allowsEdits());
+      boolean allow = this.allowsEdits();
+      if (this.request && (this.bodyOnly || this.headerOnly)) {
+        allow = true;
+        body.setEditable(true);
+      }
+      this.panel.setEditable(allow);
       this.panel.endLoad();
     });
   }
