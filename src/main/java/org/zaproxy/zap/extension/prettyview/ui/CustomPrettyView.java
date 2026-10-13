@@ -50,14 +50,6 @@ SearchableHttpPanelView {
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
-  /**
-   * Whether the displayed format round-trips through save/load. Multipart, CSV and plain text
-   * render with decorations the wire format has no room for (padded cells, part banners, collapsed
-   * whitespace), so persisting the display text would corrupt the message and those views stay
-   * read-only; the code formats only move whitespace and case. Form posts bypass this gate through
-   * a strict re-encode on save instead (see {@link #allowsEdits}).
-   */
-  private boolean formatEditable = true;
   /** The detected format of the loaded message; form posts take a dedicated save path. */
   private PayloadFormat format;
   private String parentConfigurationKey;
@@ -227,14 +219,7 @@ SearchableHttpPanelView {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
-    this.formatEditable = this.headerOnly || this.bodyEmpty || CustomPrettyView.isWireSafe(result.getFormat());
     this.format = result.getFormat();
-    if (!this.allowsEdits() && !this.formatEditable) {
-      this.textArea.setToolTipText(
-          "Decorated rendering \u2014 read-only; edit the message in the Source tab.");
-    } else {
-      this.textArea.setToolTipText(null);
-    }
     this.split = split;
     this.panel.setSplit(split);
     // The editor is given the split text and so is judged on the split text. Deciding from the formatted
@@ -362,62 +347,22 @@ SearchableHttpPanelView {
       }
       return;
     }
-    if (!this.formatEditable && !CustomPrettyView.isPlainish(this.format)) {
-      return;
-    }
     // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
     // then persist through the model like every core text view (see PrettyViewModel.setData).
+    // Every format writes back, including decorated ones (multipart banners, padded CSV cells):
+    // what you see is what is sent. Form posts take the dedicated path above instead.
     String formatted = this.split == null ? current : this.split.toOriginal(current);
     this.model.setData(formatted);
     this.lastFormatted = current;
   }
 
   /**
-   * Whether the user may edit the loaded message here. Wire-safe formats, header views and
-   * bodyless messages edit directly; form posts edit through a strict re-encode on save that
-   * refuses anything it cannot parse back exactly. Plain-text and markdown bodies carry no
-   * structural decorations (only whitespace folding, and markdown renders verbatim), so they
-   * edit and save like the wire-safe formats. Multipart and CSV stay display-only: padded
-   * cells and part banners have no trip back to wire bytes.
+   * Whether the user may edit the loaded message here. Follows the host panel like every core
+   * view: editable in the Manual Request Editor and Requester, read-only in the main viewer.
+   * Every format is editable, including decorated ones - what is shown is what gets sent.
    */
   private boolean allowsEdits() {
-    return this.isEditable()
-        && (this.formatEditable
-            || this.format == PayloadFormat.FORM_URLENCODED
-            || CustomPrettyView.isPlainish(this.format));
-  }
-
-  /**
-   * Plain-text bodies (and markdown, which renders verbatim for lack of a prettifier) have no
-   * structural decorations, so an edit round-trips closely enough to persist. Without this,
-   * typing a first body into an empty editor would pin the view read-only on the next load.
-   */
-  private static boolean isPlainish(PayloadFormat format) {
-    return format == PayloadFormat.PLAIN_TEXT || format == PayloadFormat.MARKDOWN;
-  }
-
-  /**
-   * Whether a formatted body survives a save semantically intact. The formats below only move
-   * whitespace and letter case (or re-spell entities, in HTML's case) - everything a parser reads
-   * back identically. Everything else renders decorations - padded CSV cells, "a = 1" pairs, part
-   * banners, collapsed runs - that change what the bytes mean, so those views are display-only.
-   */
-  private static boolean isWireSafe(PayloadFormat format) {
-    if (format == null) {
-      return true;
-    }
-    switch (format) {
-      case JSON:
-      case GRAPHQL:
-      case HTML:
-      case XML:
-      case CSS:
-      case JAVASCRIPT:
-      case SQL:
-        return true;
-      default:
-        return false;
-    }
+    return this.isEditable();
   }
 
   /**
