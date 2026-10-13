@@ -541,7 +541,7 @@ SearchableHttpPanelView {
     while (check != null) {
       if (check instanceof java.awt.Window) {
         String cname = check.getClass().getName();
-        if (cname.contains("Manual") || cname.contains("manual") || cname.contains("Requester") || cname.contains("requester") || cname.contains("RequestEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend")) {
+        if (cname.contains("Manual") || cname.contains("manual") || cname.contains("Request") && cname.contains("Editor") || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend")) {
           inEditor = true;
           break;
         }
@@ -588,7 +588,7 @@ SearchableHttpPanelView {
     while (pp != null) {
       if (pp instanceof java.awt.Window) {
         String cname = pp.getClass().getName();
-        if (cname.contains("Manual") || cname.contains("manual") || cname.contains("Requester") || cname.contains("requester") || cname.contains("RequestEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend")) {
+        if (cname.contains("Manual") || cname.contains("manual") || cname.contains("Request") && cname.contains("Editor") || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend")) {
           inEditor = true;
           break;
         }
