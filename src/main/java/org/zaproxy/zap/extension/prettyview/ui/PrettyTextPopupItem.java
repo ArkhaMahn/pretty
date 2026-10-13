@@ -1,7 +1,15 @@
 package org.zaproxy.zap.extension.prettyview.ui;
 
 import java.awt.Component;
+import java.awt.HeadlessException;
+import java.awt.Toolkit;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
+import java.io.IOException;
+import java.io.IOException;
 import javax.swing.Action;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
@@ -172,7 +180,9 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         PrettyTextPopupItem.run(area, "RTA.RedoAction");
         break;
       case CUT:
-        PrettyTextPopupItem.run(area, "cut-to-clipboard", "cut");
+        // Done directly on the invoker instead of firing a clipboard action: looked-up actions
+        // resolve their target through focus state, which has already moved to the menu itself.
+        PrettyTextPopupItem.cutSelection(area);
         break;
       case COPY:
         // Deliberately looks "copy" up at click time: it is the split-aware action once a payload
@@ -181,7 +191,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         PrettyTextPopupItem.run(area, "copy", "copy-to-clipboard");
         break;
       case PASTE:
-        PrettyTextPopupItem.run(area, "paste-from-clipboard", "paste");
+        PrettyTextPopupItem.pasteClipboard(area);
         break;
       case DELETE:
         if (area.isEditable() && area.getSelectionStart() != area.getSelectionEnd()) {
@@ -199,8 +209,43 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         break;
       case SELECT_ALL:
       default:
-        PrettyTextPopupItem.run(area, "select-all");
+        area.selectAll();
         break;
+    }
+  }
+
+  /** Cuts the selection to the clipboard; a no-op without an editable selection. */
+  private static void cutSelection(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+      area.replaceSelection("");
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available; the text is left untouched.
+    }
+  }
+
+  /** Pastes the clipboard string at the caret; a no-op when read-only or stringless. */
+  private static void pasteClipboard(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    try {
+      Transferable contents =
+          Toolkit.getDefaultToolkit().getSystemClipboard().getContents(area);
+      if (contents != null && contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+        String text = (String) contents.getTransferData(DataFlavor.stringFlavor);
+        area.replaceSelection(text == null ? "" : text);
+      }
+    } catch (HeadlessException | IllegalStateException | SecurityException | UnsupportedFlavorException | IOException e) {
+      // No pasteable string available; the text is left untouched.
     }
   }
 
