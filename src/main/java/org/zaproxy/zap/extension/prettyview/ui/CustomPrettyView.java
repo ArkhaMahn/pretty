@@ -253,7 +253,9 @@ SearchableHttpPanelView {
     this.updateNotice(result);
     this.loading = true;
     JTextArea body = this.panel.getTextArea();
-    body.setEditable(false);
+    if (!(this.request && (this.bodyOnly || this.headerOnly))) {
+      body.setEditable(false);
+    }
     this.panel.beginLoad();
     ChunkedTextLoader.installDocument(body, document, this.panel::pinToTop, () -> {
       if (ticket != this.generation.get()) {
