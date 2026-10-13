@@ -18,6 +18,11 @@ implements PrettyPrettifier {
   /** Elements that never take a closing tag, so they leave the indent level alone. */
   private static final Set<String> VOID_ELEMENTS = new HashSet<String>();
   /**
+   * Phrasing content: these flow with surrounding text instead of breaking onto their own lines,
+   * so {@code hi <b>there</b>} stays one line. Everything else lays out as a block.
+   */
+  private static final Set<String> INLINE_ELEMENTS = new HashSet<String>();
+  /**
    * Elements whose content is captured verbatim up to the matching close tag instead of being
    * tokenised: markup-looking bytes inside them are content.
    */
@@ -30,6 +35,15 @@ implements PrettyPrettifier {
     };
     for (String tag : voids) {
       VOID_ELEMENTS.add(tag);
+    }
+    String[] inline = {
+      "a", "abbr", "acronym", "b", "bdi", "bdo", "big", "br", "button", "cite", "code", "data",
+      "dfn", "em", "font", "i", "img", "input", "kbd", "label", "map", "mark", "meter", "nobr",
+      "noscript", "object", "output", "progress", "q", "ruby", "s", "samp", "select", "small",
+      "span", "strike", "strong", "sub", "sup", "time", "tt", "u", "var", "wbr"
+    };
+    for (String tag : inline) {
+      INLINE_ELEMENTS.add(tag);
     }
     String[] verbatim = {"textarea", "pre", "template", "title"};
     for (String tag : verbatim) {
@@ -69,6 +83,12 @@ implements PrettyPrettifier {
     // In HTML parsing a self-closing slash never closes a raw-text element (<script/> still
     // opens one), so the indenter is told to ignore it there.
     return MarkupIndenter.format(
-        body, VOID_ELEMENTS, VERBATIM_BLOCKS, this.blockFormatters, true, MAX_ELEMENT_DEPTH);
+        body,
+        VOID_ELEMENTS,
+        INLINE_ELEMENTS,
+        VERBATIM_BLOCKS,
+        this.blockFormatters,
+        true,
+        MAX_ELEMENT_DEPTH);
   }
 }

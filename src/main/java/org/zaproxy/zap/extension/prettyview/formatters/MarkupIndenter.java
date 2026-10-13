@@ -15,6 +15,10 @@ import java.util.regex.Pattern;
  * entities, doctypes and attribute quoting are untouched. A tree-based serializer would instead
  * complete whatever it thinks is missing - exactly the rewriting this view must not do to
  * responses under analysis.
+ *
+ * <p>Layout obeys inline and block rules: block elements break onto their own lines and indent
+ * their children, while inline elements and text flow together untouched ({@code hi <b>there</b>}
+ * stays one line). XML passes an empty inline set, so every element lays out as a block.
  */
 final class MarkupIndenter {
   /** Formats a raw-text element body (scripts, stylesheets); byte-verbatim on any failure. */
@@ -34,6 +38,8 @@ final class MarkupIndenter {
    *
    * @param voidElements tag names that never take a closing tag (HTML void elements; empty for
    *     XML, where every element closes explicitly)
+   * @param inlineElements tag names that flow with surrounding text instead of breaking onto
+   *     their own lines (HTML phrasing content; empty for XML, where every element is a block)
    * @param verbatimBlocks tag names whose content is captured verbatim up to the matching close
    * @param blockFormatters raw-text handlers by tag name; a present handler gets a best-effort
    *     whitespace-only reformat, anything else stays verbatim
@@ -45,6 +51,7 @@ final class MarkupIndenter {
   static String format(
       String body,
       Set<String> voidElements,
+      Set<String> inlineElements,
       Set<String> verbatimBlocks,
       Map<String, BlockFormatter> blockFormatters,
       boolean rawIgnoresSelfClose,
@@ -55,7 +62,7 @@ final class MarkupIndenter {
     }
     List<Token> tokens =
         MarkupIndenter.tokenize(body, verbatimBlocks, blockFormatters.keySet(), rawIgnoresSelfClose);
-    return MarkupIndenter.layout(tokens, voidElements, blockFormatters, maxDepth);
+    return MarkupIndenter.layout(tokens, voidElements, inlineElements, blockFormatters, maxDepth);
   }
 
   /** A tag, a special block (comment, doctype, processing instruction), or a text run. */
@@ -261,55 +268,170 @@ final class MarkupIndenter {
     return -1;
   }
 
+  /**
+   * An output line under construction: finished lines plus at most one open line that inline
+   * content keeps flowing into. Only newlines and indentation are ever inserted; token bytes
+   * are appended untouched.
+   */
+  private static final class Flow {
+    final List<String> lines = new ArrayList<String>();
+    StringBuilder cur;
+    int indent;
+    int length;
+
+    String indentOf() {
+      return PrettyPrettifier.INDENT.repeat(Math.min(this.indent, PrettyPrettifier.MAX_INDENT_DEPTH));
+    }
+
+    /** Appends to the open line, starting an indented one when between lines. */
+    void appendFlow(String segment) {
+      if (segment.isEmpty()) {
+        return;
+      }
+      if (this.cur == null) {
+        // Whitespace between blocks carries no content; inside a line it separates words.
+        if (segment.trim().isEmpty()) {
+          return;
+        }
+        this.cur = new StringBuilder(this.indentOf()).append(segment);
+      } else {
+        this.cur.append(segment);
+      }
+      this.length += segment.length();
+    }
+
+    void flush() {
+      if (this.cur != null) {
+        this.lines.add(this.cur.toString());
+        this.cur = null;
+      }
+    }
+
+    /** A block of its own on a fresh indented line. */
+    void ownLine(String text) {
+      this.flush();
+      this.lines.add(this.indentOf() + text);
+      this.length += text.length();
+    }
+
+    /** A line exactly as it stands, with no indentation added. */
+    void verbatimLine(String text) {
+      this.flush();
+      this.lines.add(text);
+      this.length += text.length();
+    }
+
+    /**
+     * Flows text inline: the first segment joins the open line, continuation lines go back
+     * verbatim, and a non-blank tail stays open so following inline content continues it.
+     */
+    void flowText(String text) {
+      String[] segments = text.split("\n", -1);
+      this.appendFlow(segments[0]);
+      for (int i = 1; i < segments.length; ++i) {
+        this.flush();
+        if (i == segments.length - 1) {
+          if (!segments[i].isEmpty()) {
+            this.cur = new StringBuilder(segments[i]);
+            this.length += segments[i].length();
+          }
+        } else {
+          this.lines.add(segments[i]);
+          this.length += segments[i].length();
+        }
+      }
+    }
+
+    String join() {
+      this.flush();
+      StringBuilder out = new StringBuilder(this.length + this.lines.size());
+      for (int i = 0; i < this.lines.size(); ++i) {
+        if (i > 0) {
+          out.append('\n');
+        }
+        out.append(this.lines.get(i));
+      }
+      return out.toString();
+    }
+  }
+
   private static String layout(
       List<Token> tokens,
       Set<String> voidElements,
+      Set<String> inlineElements,
       Map<String, BlockFormatter> blockFormatters,
       int maxDepth)
       throws PrettificationException {
-    StringBuilder out = new StringBuilder();
-    int indent = 0;
+    Flow flow = new Flow();
     int size = tokens.size();
     for (int t = 0; t < size; ++t) {
       Token token = tokens.get(t);
       switch (token.kind) {
         case SPECIAL:
-          MarkupIndenter.emitMultiline(out, token.raw, indent);
-          break;
-        case TEXT:
-          if (!token.raw.trim().isEmpty()) {
-            MarkupIndenter.emitText(out, token.raw, indent);
+          if (MarkupIndenter.isBlockSpecial(token.raw)) {
+            flow.ownLine(token.raw);
+          } else {
+            flow.flowText(token.raw);
           }
           break;
+        case TEXT:
+          flow.flowText(token.raw);
+          break;
         case CLOSE:
-          indent = Math.max(0, indent - 1);
-          MarkupIndenter.emitLine(out, token.raw, indent);
+          if (!token.name.isEmpty() && inlineElements.contains(token.name)) {
+            flow.appendFlow(token.raw);
+          } else {
+            flow.flush();
+            flow.indent = Math.max(0, flow.indent - 1);
+            flow.ownLine(token.raw);
+          }
           break;
         case OPEN:
           if (token.selfClosing
               || voidElements.contains(token.name)
-              || MarkupIndenter.closesImmediately(tokens, t)) {
-            MarkupIndenter.emitLine(out, token.raw, indent);
+              || !token.name.isEmpty() && inlineElements.contains(token.name)) {
+            flow.appendFlow(token.raw);
             break;
           }
-          MarkupIndenter.emitLine(out, token.raw, indent);
-          ++indent;
-          if (indent > maxDepth) {
+          if (MarkupIndenter.closesImmediately(tokens, t)) {
+            flow.flush();
+            flow.ownLine(token.raw + tokens.get(t + 1).raw);
+            ++t;
+            break;
+          }
+          int inlineClose =
+              MarkupIndenter.collapsibleClose(tokens, t, voidElements, inlineElements);
+          if (inlineClose > 0) {
+            flow.flush();
+            StringBuilder single = new StringBuilder(token.raw);
+            for (int j = t + 1; j <= inlineClose; ++j) {
+              single.append(tokens.get(j).raw);
+            }
+            flow.ownLine(single.toString());
+            t = inlineClose;
+            break;
+          }
+          flow.flush();
+          flow.ownLine(token.raw);
+          ++flow.indent;
+          if (flow.indent > maxDepth) {
             throw new PrettificationException("Markup nests too deeply; rendered verbatim");
           }
           break;
         case RAW:
-          MarkupIndenter.emitRaw(out, token, blockFormatters);
+          flow.flush();
+          MarkupIndenter.emitRaw(flow, token, blockFormatters);
           break;
         default:
-          MarkupIndenter.emitLine(out, token.raw, indent);
+          flow.flush();
+          flow.ownLine(token.raw);
           break;
       }
-      if (out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+      if (flow.length > PrettyPrettifier.MAX_OUTPUT_CHARS) {
         throw new PrettificationException("Formatted output exceeded its size cap; rendered verbatim");
       }
     }
-    return out.toString();
+    return flow.join();
   }
 
   /**
@@ -327,29 +449,80 @@ final class MarkupIndenter {
         && open.name.equals(next.name);
   }
 
-  private static void emitLine(StringBuilder out, String text, int indent) {
-    if (out.length() > 0) {
-      out.append('\n');
-    }
-    out.append(PrettyPrettifier.INDENT.repeat(Math.min(indent, PrettyPrettifier.MAX_INDENT_DEPTH)));
-    out.append(text);
-  }
+  /** Longest inline-only span, in characters, that still collapses onto one line. */
+  private static final int COLLAPSE_MAX_CHARS = 1000;
+  /** Furthest ahead the collapse scan looks for the matching close tag. */
+  private static final int COLLAPSE_MAX_TOKENS = 300;
 
-  /** Emits text as it stands: the first line takes the indent, continuation lines are verbatim. */
-  private static void emitText(StringBuilder out, String text, int indent) {
-    String[] lines = text.split("\n", -1);
-    for (int i = 0; i < lines.length; ++i) {
-      if (i == 0) {
-        MarkupIndenter.emitLine(out, lines[i], indent);
-      } else {
-        out.append('\n').append(lines[i]);
+  /**
+   * Index of the close tag completing a block whose whole content is inline (text, inline tags,
+   * void tags, single-line comments), so the element stays on one line, or -1 when the content
+   * holds a nested block, raw content, a multi-line run, or no matching close at all. Only
+   * single-line runs collapse: joining across a newline would delete it.
+   */
+  private static int collapsibleClose(
+      List<Token> tokens, int openAt, Set<String> voidElements, Set<String> inlineElements) {
+    Token open = tokens.get(openAt);
+    if (open.name.isEmpty() || open.raw.indexOf('\n') >= 0) {
+      return -1;
+    }
+    int total = 0;
+    int size = tokens.size();
+    for (int j = openAt + 1; j < size && j - openAt <= COLLAPSE_MAX_TOKENS; ++j) {
+      Token current = tokens.get(j);
+      switch (current.kind) {
+        case TEXT:
+        case SPECIAL:
+          if (current.raw.indexOf('\n') >= 0) {
+            return -1;
+          }
+          total += current.raw.length();
+          break;
+        case OPEN:
+          if (current.selfClosing
+              || voidElements.contains(current.name)
+              || !current.name.isEmpty() && inlineElements.contains(current.name)) {
+            if (current.raw.indexOf('\n') >= 0) {
+              return -1;
+            }
+            total += current.raw.length();
+            break;
+          }
+          return -1;
+        case CLOSE:
+          if (!current.name.isEmpty() && inlineElements.contains(current.name)) {
+            if (current.raw.indexOf('\n') >= 0) {
+              return -1;
+            }
+            total += current.raw.length();
+            break;
+          }
+          if (!current.name.equals(open.name)) {
+            return -1;
+          }
+          total += current.raw.length();
+          return total <= COLLAPSE_MAX_CHARS ? j : -1;
+        default:
+          return -1;
+      }
+      if (total > COLLAPSE_MAX_CHARS) {
+        return -1;
       }
     }
+    return -1;
   }
 
-  /** Emits a multi-line special block the same way: first line indented, the rest verbatim. */
-  private static void emitMultiline(StringBuilder out, String text, int indent) {
-    MarkupIndenter.emitText(out, text, indent);
+  /**
+   * True for special blocks that stand on their own line (doctypes, processing instructions).
+   * Comments flow inline with surrounding text instead.
+   */
+  private static boolean isBlockSpecial(String raw) {
+    if (raw.startsWith("<?")) {
+      return true;
+    }
+    return raw.startsWith("<!")
+        && !raw.startsWith("<!--")
+        && !raw.regionMatches(true, 2, "[CDATA[", 0, 7);
   }
 
   /**
@@ -357,7 +530,7 @@ final class MarkupIndenter {
    * whitespace-only reformat (verbatim on any failure); anything else is never touched.
    */
   private static void emitRaw(
-      StringBuilder out, Token token, Map<String, BlockFormatter> blockFormatters)
+      Flow flow, Token token, Map<String, BlockFormatter> blockFormatters)
       throws PrettificationException {
     String content = token.raw;
     BlockFormatter formatter = blockFormatters.get(token.name);
@@ -377,10 +550,7 @@ final class MarkupIndenter {
     }
     String[] lines = content.split("\n", -1);
     for (String line : lines) {
-      if (out.length() > 0) {
-        out.append('\n');
-      }
-      out.append(line);
+      flow.verbatimLine(line);
     }
   }
 }

@@ -26,10 +26,12 @@ implements PrettyPrettifier {
 
   @Override
   public String prettify(String body) throws PrettificationException {
-    // XML has no void elements and no raw-text elements: every element closes explicitly, and
-    // CDATA sections, comments and processing instructions are tokenised as special blocks.
+    // XML has no void elements, no inline elements and no raw-text elements: every element
+    // closes explicitly and lays out as a block, and CDATA sections, comments and processing
+    // instructions are tokenised as special blocks.
     return MarkupIndenter.format(
         body,
+        new HashSet<String>(),
         new HashSet<String>(),
         new HashSet<String>(),
         Collections.<String, MarkupIndenter.BlockFormatter>emptyMap(),
