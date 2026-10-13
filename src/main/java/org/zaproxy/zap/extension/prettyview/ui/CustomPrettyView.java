@@ -567,7 +567,22 @@ SearchableHttpPanelView {
     // Manual Request Editor call saveData on send; nothing ever saves the main window panels),
     // so an editable main-window view is harmless while every editor panel writes back on send.
     // Response views keep following the host panel, like every core view.
-    if (this.request && !editable) {
+    // Allow in editor windows
+    boolean inEditor = false;
+    java.awt.Container pp = this.panel.getParent();
+    while (pp != null) {
+      if (pp instanceof java.awt.Window) {
+        String cname = pp.getClass().getName();
+        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("ManualRequestEditor")) {
+          inEditor = true;
+          break;
+        }
+      }
+      pp = pp.getParent();
+    }
+    if (this.request && !editable && !inEditor) {
+      editable = true;
+    } else if (inEditor && this.request) {
       editable = true;
     }
     this.editable = editable;
