@@ -102,10 +102,10 @@ SearchableHttpPanelView {
     this.request = request;
     this.bodyOnly = bodyOnly;
     this.headerOnly = headerOnly;
-    // Full-request views are editable everywhere: the combined panel shows the whole message and
-    // only the send flows persist it, so the main window (which never saves) stays harmless while
-    // Requester and the Manual Request Editor write back on send. Split views take editability
-    // from the host panel through the core addComponent/addView pushes, like every core view.
+    // Detect if in editor/requester context (Manual Request Editor or Requester)
+    boolean inEditor = false;
+    // Can't check parent yet as panel not created; but we'll be called from UI - alternatively, rely on setEditable called by host
+    // For now, follow original behavior; actual enforcement in setEditable/isEditable
     this.editable = request;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
@@ -580,11 +580,16 @@ SearchableHttpPanelView {
       }
       pp = pp.getParent();
     }
-    if (this.request && !editable && !inEditor) {
-      editable = true;
+    // Only make request viewer read-only in non-editor contexts (main viewer)
+    if (!inEditor && this.request) {
+      editable = false;
     } else if (inEditor && this.request) {
-      editable = true;
+      // In editors, keep request editable as before
+      if (!editable) {
+        editable = true;
+      }
     }
+    // Response views follow host as before (not modified)
     this.editable = editable;
     if (!this.loading) {
       this.panel.setEditable(this.allowsEdits());
