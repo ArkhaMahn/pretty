@@ -137,8 +137,9 @@ extends JPanel {
   /**
    * Shows ZAP's own message popup on right-click, exactly as the core request and response panels
    * do: the same menu over the same kind of message container, so the Pretty tabs offer precisely
-   * the options the Text view offers - nothing added, nothing missing. Text actions stay on the
-   * keyboard (Ctrl+X/C/V/F and friends); the mouse menu is ZAP's.
+   * the options the Text view offers - nothing added, nothing missing. Like core, focus is handed
+   * back to the editor first, so focus-sensitive text operations resolve against it rather than
+   * the menu.
    */
   private void installPopupMenu() {
     this.textArea.addMouseListener(new MouseAdapter() {
@@ -157,6 +158,11 @@ extends JPanel {
   private void showPopup(MouseEvent event) {
     if (!event.isPopupTrigger()) {
       return;
+    }
+    // Core parity (HttpPanelTextView$CustomPopupMenu): hand focus back to the editor before the
+    // menu shows, so text operations fired from it resolve against this area.
+    if (!this.textArea.isFocusOwner()) {
+      this.textArea.requestFocusInWindow();
     }
     if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
       int position = this.textArea.viewToModel2D(event.getPoint());
