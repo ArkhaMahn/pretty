@@ -106,7 +106,15 @@ SearchableHttpPanelView {
     boolean inEditor = false;
     // Can't check parent yet as panel not created; but we'll be called from UI - alternatively, rely on setEditable called by host
     
-    this.editable = request;
+    boolean inEditorInit = false;
+    if (this.request && (this.bodyOnly || this.headerOnly)) {
+      inEditorInit = true;
+    }
+    if (request && !inEditorInit) {
+      this.editable = false;
+    } else {
+      this.editable = request;
+    }
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
