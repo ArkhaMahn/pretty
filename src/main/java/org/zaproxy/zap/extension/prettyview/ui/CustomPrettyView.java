@@ -360,7 +360,7 @@ SearchableHttpPanelView {
     // Only an editable view writes back. Responses stay read-only everywhere; requests edit
     // wherever the host allows. Multipart, CSV and plain text never write back even when the host
     // is editable: their decorations have no safe trip back to wire bytes.
-    if (!this.editable) {
+    if (!this.isEditable()) {
       return;
     }
     // Form posts take a dedicated path: the display is decoded and annotated, so it is strictly
