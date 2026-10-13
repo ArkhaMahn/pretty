@@ -588,7 +588,7 @@ SearchableHttpPanelView {
     java.awt.Container pp = this.panel.getParent();
     while (pp != null) {
       String cname = pp.getClass().getName();
-      String name = check.getName();
+      String name = pp.getName();
       if (cname.contains("Manual") || cname.contains("manual") || (cname.contains("Request") && (cname.contains("Editor") || cname.contains("er"))) || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend") || cname.contains("addon.requester") || cname.contains("org.zaproxy.addon.requester") || cname.contains("MessageEditorDialog") || cname.contains("RequesterPanel") || cname.contains("CustomHttpPanelRequest") || cname.contains("RequesterNumbered") || cname.contains("AbstractHttpMessageEditorDialog") || (name != null && (name.toLowerCase().contains("requester") || name.toLowerCase().contains("manual") || name.toLowerCase().contains("editor")))) {
         inEditor = true;
         break;
