@@ -103,7 +103,7 @@ SearchableHttpPanelView {
     // only the send flows persist it, so the main window (which never saves) stays harmless while
     // Requester and the Manual Request Editor write back on send. Split views take editability
     // from the host panel through the core addComponent/addView pushes, like every core view.
-    this.editable = false;
+    this.editable = request;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
@@ -346,7 +346,9 @@ SearchableHttpPanelView {
     if (current.equals(this.lastFormatted)) {
       return;
     }
-    // Only an editable view writes back. Both requests and responses stay read-only here.
+    // Only an editable view writes back. Responses stay read-only everywhere; requests edit
+    // wherever the host allows. Multipart, CSV and plain text never write back even when the host
+    // is editable: their decorations have no safe trip back to wire bytes.
     if (!this.editable) {
       return;
     }
@@ -533,9 +535,14 @@ SearchableHttpPanelView {
 
   @Override
   public void setEditable(boolean editable) {
-    // Follow the host panel; requests and responses are read-only here.
-    
-    this.editable = false;
+    // Request views stay editable everywhere. Only the send flows persist (Requester and the
+    // Manual Request Editor call saveData on send; nothing ever saves the main window panels),
+    // so an editable main-window view is harmless while every editor panel writes back on send.
+    // Response views keep following the host panel, like every core view.
+    if (this.request && !editable) {
+      editable = true;
+    }
+    this.editable = editable;
     if (!this.loading) {
       this.panel.setEditable(this.allowsEdits());
     }
