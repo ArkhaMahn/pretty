@@ -50,7 +50,6 @@ SearchableHttpPanelView {
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
-  private String parentConfigurationKey;
   private String lastFormatted = "";
   private DisplayLineSplitter.Split split;
   /**
@@ -342,7 +341,7 @@ SearchableHttpPanelView {
 
   @Override
   public int getPosition() {
-    return 2;
+    return POSITION;
   }
 
   @Override
@@ -541,11 +540,7 @@ SearchableHttpPanelView {
 
   @Override
   public void setParentConfigurationKey(String parentConfigurationKey) {
-    this.parentConfigurationKey = parentConfigurationKey;
-  }
-
-  public String getParentConfigurationKey() {
-    return this.parentConfigurationKey;
+    // No view-level configuration is stored; the panels own their keys.
   }
 
   @Override
@@ -565,14 +560,6 @@ SearchableHttpPanelView {
     this.worker.shutdown();
     this.loading = false;
     this.panel.dispose();
-  }
-
-  public int getSubmittedTaskCount() {
-    return this.worker.getSubmittedCount();
-  }
-
-  public boolean isRequest() {
-    return this.request;
   }
 }
 

@@ -5,7 +5,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -21,8 +20,6 @@ public final class PrettyWorker {
   };
   private final ExecutorHolder holder;
   private final AtomicReference<PrettyWorkerTask> current = new AtomicReference();
-  private final AtomicInteger submitted = new AtomicInteger();
-  private final AtomicInteger skipped = new AtomicInteger();
 
   public PrettyWorker() {
     this.holder = new ExecutorHolder();
@@ -42,12 +39,11 @@ public final class PrettyWorker {
         ? () -> prettifierManager.prettifyBodyMessage(message, contentType)
         : () -> prettifierManager.prettifyMessage(message, contentType);
     block3: {
-      PrettyWorkerTask task = new PrettyWorkerTask(message, contentType, formatting, onResult);
+      PrettyWorkerTask task = new PrettyWorkerTask(message, formatting, onResult);
       PrettyWorkerTask previous = this.current.getAndSet(task);
       if (previous != null) {
         previous.cancel();
       }
-      this.submitted.incrementAndGet();
       try {
         this.holder.executor.execute(task);
       }
@@ -63,7 +59,6 @@ public final class PrettyWorker {
     PrettyWorkerTask queued = this.holder.clearQueued();
     if (queued != null) {
       queued.cancel();
-      this.skipped.incrementAndGet();
     }
     try {
       this.holder.executor.execute(task);
@@ -75,28 +70,19 @@ public final class PrettyWorker {
   }
 
   public void cancelPending() {
-    PrettyWorkerTask queued;
     PrettyWorkerTask task = this.current.getAndSet(null);
     if (task != null) {
       task.cancel();
     }
-    if ((queued = this.holder.clearQueued()) != null) {
+    PrettyWorkerTask queued = this.holder.clearQueued();
+    if (queued != null) {
       queued.cancel();
-      this.skipped.incrementAndGet();
     }
   }
 
   public void shutdown() {
     this.cancelPending();
     this.holder.executor.shutdownNow();
-  }
-
-  public int getSubmittedCount() {
-    return this.submitted.get();
-  }
-
-  public int getSkippedCount() {
-    return this.skipped.get();
   }
 
   private static final class ExecutorHolder {

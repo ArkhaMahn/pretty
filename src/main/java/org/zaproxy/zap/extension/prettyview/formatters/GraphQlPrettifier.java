@@ -1,7 +1,5 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
-import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -14,7 +12,6 @@ import java.util.regex.Pattern;
 public class GraphQlPrettifier
 implements PrettyPrettifier {
   private static final Pattern STRING = Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"", 32);
-  private static final String[] OPERATIONS = new String[]{"query", "mutation", "subscription", "fragment"};
   private final JsonPrettifier jsonPrettifier = new JsonPrettifier();
 
   @Override
@@ -125,22 +122,6 @@ implements PrettyPrettifier {
     for (int i = 0; i < drawn; ++i) {
       out.append(PrettyPrettifier.INDENT);
     }
-  }
-
-  public static boolean looksLikeGraphQl(String body) {
-    if (body == null) {
-      return false;
-    }
-    String lower = body.trim().toLowerCase(Locale.ROOT);
-    for (String operation : OPERATIONS) {
-      if (!lower.startsWith(operation + " ") && !lower.startsWith(operation + "{")) continue;
-      return true;
-    }
-    return lower.startsWith("{") && lower.contains(")");
-  }
-
-  public static List<String> getOperations() {
-    return List.of(OPERATIONS);
   }
 }
 

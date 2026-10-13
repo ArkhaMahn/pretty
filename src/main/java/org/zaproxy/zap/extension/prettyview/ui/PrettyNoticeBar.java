@@ -29,18 +29,18 @@ extends JPanel {
     this.spinnerLabel = new JLabel(" ", 0);
     this.spinnerLabel.setFont(new Font("Monospaced", 0, 11));
     this.spinnerLabel.setVisible(false);
-    this.spinnerLabel.setPreferredSize(new Dimension(14, 22));
-    this.spinnerLabel.setMinimumSize(new Dimension(14, 22));
-    this.spinnerLabel.setMaximumSize(new Dimension(14, 22));
+    this.spinnerLabel.setPreferredSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
+    this.spinnerLabel.setMinimumSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
+    this.spinnerLabel.setMaximumSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
     this.spinnerSlot = new JPanel(new BorderLayout());
     this.spinnerSlot.setOpaque(false);
-    this.spinnerSlot.setPreferredSize(new Dimension(14, 22));
+    this.spinnerSlot.setPreferredSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
     this.spinnerSlot.add((Component)this.spinnerLabel, "Center");
     this.add((Component)this.spinnerSlot, "Before");
     this.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
-    this.setPreferredSize(new Dimension(100, 22));
-    this.setMinimumSize(new Dimension(100, 22));
-    this.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+    this.setPreferredSize(new Dimension(100, BAR_HEIGHT));
+    this.setMinimumSize(new Dimension(100, BAR_HEIGHT));
+    this.setMaximumSize(new Dimension(Integer.MAX_VALUE, BAR_HEIGHT));
   }
 
   public void showLoading(String detail) {
@@ -88,11 +88,6 @@ extends JPanel {
   private void setMessage(String message) {
     this.label.setText(message.isEmpty() ? " " : message);
     this.getAccessibleContext().setAccessibleName(message.isEmpty() ? "No message" : message);
-  }
-
-  public String getMessage() {
-    String text = this.label.getText();
-    return " ".equals(text) ? "" : text;
   }
 }
 

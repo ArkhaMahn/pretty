@@ -1,7 +1,6 @@
 package org.zaproxy.zap.extension.prettyview.view;
 
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelDefaultViewSelector;
-import org.zaproxy.zap.extension.prettyview.formatters.PrettifyThreshold;
 import org.zaproxy.zap.view.HttpPanelManager;
 
 public final class PrettyDefaultViewSelectorFactory
@@ -12,15 +11,6 @@ implements HttpPanelManager.HttpPanelDefaultViewSelectorFactory {
   private final int maxPrettifyChars;
   private final ViewChoiceMemory choices;
   private final Object options;
-
-  public PrettyDefaultViewSelectorFactory(String name, String viewName, boolean request) {
-    this(name, viewName, request, PrettifyThreshold.defaultThreshold().getThresholdChars(), null, null);
-  }
-
-  public PrettyDefaultViewSelectorFactory(
-      String name, String viewName, boolean request, int maxPrettifyChars) {
-    this(name, viewName, request, maxPrettifyChars, null, null);
-  }
 
   public PrettyDefaultViewSelectorFactory(
       String name,

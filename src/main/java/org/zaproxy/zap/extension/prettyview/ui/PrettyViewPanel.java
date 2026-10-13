@@ -34,8 +34,7 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 public final class PrettyViewPanel
 extends JPanel {
   private static final long serialVersionUID = 1L;
-  private static final long TICK_MILLIS = 150;
-  private static final String COPY_KEY = "copy";
+  private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
   private final JScrollPane scrollPane;
   private final PrettyNoticeBar noticeBar;
@@ -65,7 +64,7 @@ extends JPanel {
     header.add((Component)this.searchBar, "South");
     this.add((Component)header, "North");
     this.add((Component)this.scrollPane, "Center");
-    this.tickTimer = new Timer(150, event -> this.noticeBar.advanceSpinner());
+    this.tickTimer = new Timer(TICK_MILLIS, event -> this.noticeBar.advanceSpinner());
     this.tickTimer.setRepeats(true);
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null) {
@@ -295,10 +294,6 @@ extends JPanel {
     return this.textArea;
   }
 
-  public JScrollPane getScrollPane() {
-    return this.scrollPane;
-  }
-
   /**
    * Reminds the panel how the displayed text was broken up, so a copy hands back the characters as the
    * response holds them rather than as the editor shows them.
@@ -374,10 +369,6 @@ extends JPanel {
         this.applyScrollUnit();
       }
     }
-  }
-
-  public PrettyNoticeBar getNoticeBar() {
-    return this.noticeBar;
   }
 
   public void showLoading(String sizeHint) {

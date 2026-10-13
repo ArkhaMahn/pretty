@@ -11,23 +11,16 @@ implements HttpPanelDefaultViewSelector {
    * Where this selector has to sit among ZAP's own.
    *
    * <p>ZAP sorts the default view selectors by order ascending and takes the first one that matches, so a
-   * lower number wins. It ships an image selector at 20 and large request and response selectors at 50, so
+   * lower number wins. ZAP ships an image selector at 20 and large request and response selectors at 50, so
    * 30 puts this in front of the large-body views while still letting an image response open in the image
    * view rather than being prettified as if it were text.
    */
-  public static final int IMAGE_SELECTOR_ORDER = 20;
-  public static final int LARGE_SELECTOR_ORDER = 50;
   public static final int ORDER = 30;
   private final String name;
   private final String viewName;
   private final boolean request;
   private final int maxPrettifyChars;
   private final ViewChoiceMemory choices;
-
-  public PrettyDefaultViewSelector(
-      String name, String viewName, boolean request, int maxPrettifyChars) {
-    this(name, viewName, request, maxPrettifyChars, null);
-  }
 
   public PrettyDefaultViewSelector(
       String name,

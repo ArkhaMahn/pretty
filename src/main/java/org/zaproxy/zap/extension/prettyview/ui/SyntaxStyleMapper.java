@@ -1,6 +1,5 @@
 package org.zaproxy.zap.extension.prettyview.ui;
 
-import java.util.Locale;
 import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
 
 public final class SyntaxStyleMapper {
@@ -50,10 +49,6 @@ public final class SyntaxStyleMapper {
       }
     }
     return "text/plain";
-  }
-
-  public static String labelOf(PayloadFormat format) {
-    return format == null ? "plain text" : format.name().toLowerCase(Locale.ROOT);
   }
 }
 

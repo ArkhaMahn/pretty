@@ -6,26 +6,19 @@ import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.zaproxy.zap.extension.prettyview.formatters.PrettyResult;
-import org.zaproxy.zap.extension.prettyview.formatters.UniversalPrettifierManager;
 
 public final class PrettyWorkerTask
 implements Runnable {
   private static final Logger LOGGER = LogManager.getLogger(PrettyWorkerTask.class);
   private final String message;
-  private final String contentType;
   private final Supplier<PrettyResult> formatting;
   private final Consumer<PrettyResult> onResult;
   private final AtomicBoolean cancelled = new AtomicBoolean();
   private final AtomicBoolean published = new AtomicBoolean();
   private volatile Thread workerThread;
 
-  public PrettyWorkerTask(String message, String contentType, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
-    this(message, contentType, () -> prettifierManager.prettifyMessage(message, contentType), onResult);
-  }
-
-  PrettyWorkerTask(String message, String contentType, Supplier<PrettyResult> formatting, Consumer<PrettyResult> onResult) {
+  PrettyWorkerTask(String message, Supplier<PrettyResult> formatting, Consumer<PrettyResult> onResult) {
     this.message = message;
-    this.contentType = contentType;
     this.formatting = formatting;
     this.onResult = onResult;
   }
@@ -74,14 +67,6 @@ implements Runnable {
 
   public boolean isCancelled() {
     return this.cancelled.get();
-  }
-
-  public boolean isPublished() {
-    return this.published.get();
-  }
-
-  public String getContentType() {
-    return this.contentType;
   }
 }
 

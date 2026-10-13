@@ -1,10 +1,5 @@
 package org.zaproxy.zap.extension.prettyview.ui;
 
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 import org.parosproxy.paros.network.HttpHeader;
 import org.parosproxy.paros.network.HttpMalformedHeaderException;
 import org.parosproxy.paros.network.HttpMessage;
@@ -32,10 +27,6 @@ extends AbstractStringHttpPanelViewModel {
     this.request = request;
     this.bodyOnly = bodyOnly;
     this.headerOnly = headerOnly;
-  }
-
-  public boolean isRequest() {
-    return this.request;
   }
 
   @Override
@@ -122,86 +113,6 @@ extends AbstractStringHttpPanelViewModel {
     } else {
       httpMessage.setResponseHeader(PrettyViewModel.toWireForm(header));
       httpMessage.setResponseBody(body);
-    }
-  }
-
-  /**
-   * Persists edited form display text back to wire bytes. The display is decoded and annotated
-   * ("{@code name = value}", "{@code raw:}" echoes, "{@code (no value)}" markers), so persisting
-   * it raw would corrupt the body; instead each pair line is strictly re-parsed and re-encoded.
-   *
-   * <p>Anything that cannot map back exactly refuses the whole save ({@code false}) and the
-   * message is left untouched: truncation footers, multiline values, free-typed lines. Responses
-   * never write.
-   */
-  public boolean setFormData(String displayText) {
-    Message message = this.getMessage();
-    if (!(message instanceof HttpMessage) || !this.request) {
-      return false;
-    }
-    if (displayText == null) {
-      return false;
-    }
-    List<String> pairs = new ArrayList<>();
-    for (String rawLine : displayText.split("\n")) {
-      String line = rawLine.endsWith("\r") ? rawLine.substring(0, rawLine.length() - 1) : rawLine;
-      if (line.isEmpty()) {
-        continue;
-      }
-      if (line.startsWith("    raw: ")) {
-        continue;
-      }
-      if (line.startsWith("... ")) {
-        return false;
-      }
-      int sep = line.indexOf(" = ");
-      if (sep >= 0) {
-        String name = line.substring(0, sep);
-        String value = line.substring(sep + 3);
-        String encodedName = PrettyViewModel.encodeFormToken(name);
-        String encodedValue = PrettyViewModel.encodeFormToken(value);
-        if (encodedName == null || encodedValue == null) {
-          return false;
-        }
-        pairs.add(encodedName + "=" + encodedValue);
-        continue;
-      }
-      String flagSuffix = " (no value)";
-      if (line.endsWith(flagSuffix)) {
-        String name = line.substring(0, line.length() - flagSuffix.length());
-        if (name.isEmpty()) {
-          return false;
-        }
-        String encodedName = PrettyViewModel.encodeFormToken(name);
-        if (encodedName == null) {
-          return false;
-        }
-        pairs.add(encodedName);
-        continue;
-      }
-      return false;
-    }
-    String wire = String.join("&", pairs);
-    try {
-      HttpMessage httpMessage = (HttpMessage)message;
-      if (this.bodyOnly) {
-        httpMessage.setRequestBody(wire);
-        return true;
-      }
-      PrettyViewModel.writeCombined(httpMessage, this.request, this.headerTextOf(httpMessage), wire);
-      return true;
-    }
-    catch (RuntimeException | HttpMalformedHeaderException e) {
-      return false;
-    }
-  }
-
-  private static String encodeFormToken(String token) {
-    try {
-      return URLEncoder.encode(token, StandardCharsets.UTF_8.name());
-    }
-    catch (UnsupportedEncodingException e) {
-      return null;
     }
   }
 

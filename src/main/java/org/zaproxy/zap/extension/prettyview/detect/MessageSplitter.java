@@ -57,13 +57,6 @@ public final class MessageSplitter {
     public boolean hasBody() {
       return !this.body.isEmpty();
     }
-
-    public String join() {
-      if (!this.hasBody()) {
-        return this.headers;
-      }
-      return this.headers + "\n\n" + this.body;
-    }
   }
 }
 
