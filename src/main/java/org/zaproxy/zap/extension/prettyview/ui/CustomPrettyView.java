@@ -523,18 +523,21 @@ SearchableHttpPanelView {
 
   @Override
   public boolean isEditable() {
-    if (this.editable) {
-      // Allow editing in Manual Request Editor/Requester contexts even if we marked read-only
-      java.awt.Container p = this.panel.getParent();
-      while (p != null) {
-        if (p instanceof java.awt.Window) {
-          java.awt.Window w = (java.awt.Window) p;
-          if (w instanceof javax.swing.JDialog || w.getClass().getName().contains("Manual") || w.getClass().getName().contains("Requester")) {
-            return true;
-          }
+    // Check editor context
+    boolean inEditor = false;
+    java.awt.Container check = this.panel.getParent();
+    while (check != null) {
+      if (check instanceof java.awt.Window) {
+        String cname = check.getClass().getName();
+        if (cname.contains("Manual") || cname.contains("Requester") || cname.contains("ManualRequestEditor")) {
+          inEditor = true;
+          break;
         }
-        p = p.getParent();
       }
+      check = check.getParent();
+    }
+    if (this.request && !inEditor) {
+      return false;
     }
     if (this.editable) {
       return true;
