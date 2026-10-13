@@ -346,8 +346,9 @@ SearchableHttpPanelView {
     if (current.equals(this.lastFormatted)) {
       return;
     }
-    // Only an editable view writes back. Responses stay read-only everywhere; requests edit
-    // wherever the host allows. Multipart, CSV and plain text never write back even when the host
+    // Only an editable view writes back. Requests edit wherever the host allows (the main
+    // viewer host is read-only, the Manual Request Editor and Requester hosts are editable);
+    // responses follow the host too. Multipart and CSV never write back even when the host
     // is editable: their decorations have no safe trip back to wire bytes.
     if (!this.isEditable()) {
       return;
@@ -361,7 +362,7 @@ SearchableHttpPanelView {
       }
       return;
     }
-    if (!this.formatEditable) {
+    if (!this.formatEditable && !CustomPrettyView.isPlainish(this.format)) {
       return;
     }
     // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
@@ -374,10 +375,25 @@ SearchableHttpPanelView {
   /**
    * Whether the user may edit the loaded message here. Wire-safe formats, header views and
    * bodyless messages edit directly; form posts edit through a strict re-encode on save that
-   * refuses anything it cannot parse back exactly. Everything else stays display-only.
+   * refuses anything it cannot parse back exactly. Plain-text and markdown bodies carry no
+   * structural decorations (only whitespace folding, and markdown renders verbatim), so they
+   * edit and save like the wire-safe formats. Multipart and CSV stay display-only: padded
+   * cells and part banners have no trip back to wire bytes.
    */
   private boolean allowsEdits() {
-    return this.isEditable() && (this.formatEditable || this.format == PayloadFormat.FORM_URLENCODED);
+    return this.isEditable()
+        && (this.formatEditable
+            || this.format == PayloadFormat.FORM_URLENCODED
+            || CustomPrettyView.isPlainish(this.format));
+  }
+
+  /**
+   * Plain-text bodies (and markdown, which renders verbatim for lack of a prettifier) have no
+   * structural decorations, so an edit round-trips closely enough to persist. Without this,
+   * typing a first body into an empty editor would pin the view read-only on the next load.
+   */
+  private static boolean isPlainish(PayloadFormat format) {
+    return format == PayloadFormat.PLAIN_TEXT || format == PayloadFormat.MARKDOWN;
   }
 
   /**
