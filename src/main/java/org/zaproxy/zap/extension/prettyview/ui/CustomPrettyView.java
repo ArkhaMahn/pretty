@@ -386,6 +386,9 @@ SearchableHttpPanelView {
    * refuses anything it cannot parse back exactly. Everything else stays display-only.
    */
   private boolean allowsEdits() {
+    if (this.request && (this.bodyOnly || this.headerOnly)) {
+      return true;
+    }
     return this.editable && (this.formatEditable || this.format == PayloadFormat.FORM_URLENCODED);
   }
 
