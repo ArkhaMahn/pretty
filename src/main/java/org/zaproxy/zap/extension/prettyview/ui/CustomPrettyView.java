@@ -610,6 +610,9 @@ SearchableHttpPanelView {
     }
     // Response views follow host as before (not modified)
     this.editable = editable;
+    if (inEditor && this.request) {
+      this.editable = true;
+    }
     if (!this.loading) {
       this.panel.setEditable(this.allowsEdits());
     }
