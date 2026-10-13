@@ -320,6 +320,11 @@ extends JPanel {
     if (this.split == null) {
       return null;
     }
+    // The break offsets only describe the text as loaded; once edited they stop meaning
+    // anything, so an edited selection copies literally (see CopyAction).
+    if (!this.split.isDisplayText(this.textArea.getText())) {
+      return null;
+    }
     int from = this.textArea.getSelectionStart();
     int to = this.textArea.getSelectionEnd();
     if (from == to) {
@@ -330,28 +335,46 @@ extends JPanel {
       from = to;
       to = swap;
     }
-    return this.split.originalRange(from, to);
+    try {
+      return this.split.originalRange(from, to);
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
-  /** Copies through the split so the clipboard holds the response's own characters. */
+  /** Copies through the split so the clipboard holds the message's own characters. */
   private final class CopyAction extends AbstractAction {
     private static final long serialVersionUID = 1L;
     private Action delegate;
 
     @Override
     public void actionPerformed(ActionEvent event) {
+      RSyntaxTextArea area = PrettyViewPanel.this.textArea;
+      String selected = area.getSelectedText();
+      if (selected == null || selected.isEmpty()) {
+        // Nothing selected: behave like the default copy (a no-op).
+        if (this.delegate != null) {
+          this.delegate.actionPerformed(event);
+        }
+        return;
+      }
       String formatted = PrettyViewPanel.this.selectedTextAsFormatted();
-      if (formatted != null) {
+      // Never put an empty string on the clipboard for a non-empty selection: when the split
+      // mapping comes back empty (edited text, or a break-only span) the literal selection is
+      // what the user asked for.
+      if (formatted != null && !formatted.isEmpty()) {
         try {
           Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
               new StringSelection(formatted), null);
           return;
         } catch (HeadlessException | IllegalStateException | SecurityException e) {
-          // Fall through to whatever the editor would have done on its own.
+          // Fall through to the literal copy below.
         }
       }
       if (this.delegate != null) {
         this.delegate.actionPerformed(event);
+      } else {
+        area.copy();
       }
     }
   }

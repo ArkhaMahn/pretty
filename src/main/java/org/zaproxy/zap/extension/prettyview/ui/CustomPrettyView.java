@@ -271,6 +271,11 @@ SearchableHttpPanelView {
       if (ticket != this.generation.get()) {
         return;
       }
+      // A fresh document carries the old undo history with it, and undoing would then wipe
+      // past the load itself; start the history here so only user edits are undoable.
+      if (body instanceof RSyntaxTextArea) {
+        ((RSyntaxTextArea) body).discardAllEdits();
+      }
       this.lastFormatted = split.displayText();
       this.loading = false;
       this.panel.setEditable(this.allowsEdits());

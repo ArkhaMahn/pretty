@@ -5,6 +5,7 @@ import java.awt.event.ActionEvent;
 import javax.swing.Action;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
+import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
 import org.zaproxy.zap.view.messagecontainer.MessageContainer;
 import org.zaproxy.zap.view.popup.ExtensionPopupMenuComponent;
@@ -131,10 +132,12 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
     }
     switch (this.kind) {
       case UNDO:
-        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.UndoAction") != null);
+        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.UndoAction") != null
+            && PrettyTextPopupItem.canUndo(area));
         break;
       case REDO:
-        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.RedoAction") != null);
+        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.RedoAction") != null
+            && PrettyTextPopupItem.canRedo(area));
         break;
       case CUT:
       case PASTE:
@@ -203,6 +206,14 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
 
   private static Action action(JTextComponent area, String key) {
     return area.getActionMap().get(key);
+  }
+
+  private static boolean canUndo(JTextComponent area) {
+    return area instanceof RSyntaxTextArea && ((RSyntaxTextArea) area).canUndo();
+  }
+
+  private static boolean canRedo(JTextComponent area) {
+    return area instanceof RSyntaxTextArea && ((RSyntaxTextArea) area).canRedo();
   }
 
   private static void run(JTextComponent area, String... keys) {
