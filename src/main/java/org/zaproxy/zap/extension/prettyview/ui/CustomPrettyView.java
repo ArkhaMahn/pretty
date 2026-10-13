@@ -173,6 +173,10 @@ SearchableHttpPanelView {
 
   @Override
   public void dataChanged(HttpPanelViewModelEvent event) {
+    // Don't auto-refresh request split parts (editors) as it can overwrite user edits
+    if (this.request && (this.bodyOnly || this.headerOnly)) {
+      return;
+    }
     this.scheduleRefresh();
   }
 
