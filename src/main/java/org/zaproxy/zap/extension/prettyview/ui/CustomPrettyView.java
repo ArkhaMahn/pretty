@@ -11,8 +11,6 @@ import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.text.BadLocationException;
 import java.awt.*;
-import java.awt.Window;
-import java.awt.Container;
 import org.apache.commons.configuration.FileConfiguration;
 import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
@@ -102,17 +100,10 @@ SearchableHttpPanelView {
     this.request = request;
     this.bodyOnly = bodyOnly;
     this.headerOnly = headerOnly;
-    // Detect if in editor/requester context (Manual Request Editor or Requester)
-    boolean inEditor = false;
-    // Can't check parent yet as panel not created; but we'll be called from UI - alternatively, rely on setEditable called by host
-    
-    if (this.request && (this.bodyOnly || this.headerOnly)) {
-      this.editable = true;
-    } else if (request) {
-      this.editable = false;
-    } else {
-      this.editable = request;
-    }
+    // Editability follows the host panel like every core view: the main viewer (non-editable
+    // host) stays read-only while the Manual Request Editor and Requester (editable hosts)
+    // stay editable. No forcing here; HttpPanel pushes its flag via setEditable on creation.
+    this.editable = false;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
@@ -161,11 +152,7 @@ SearchableHttpPanelView {
           .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
     }
     LargePayloadPolicy.applyBaseline(area);
-    if (!(this.request && (this.bodyOnly || this.headerOnly))) {
-      area.setEditable(false);
-    } else {
-      area.setEditable(true);
-    }
+    area.setEditable(false);
     area.setText("");
     EditorTheme.apply(area, null, EditorTheme.palette());
     return area;
@@ -173,10 +160,6 @@ SearchableHttpPanelView {
 
   @Override
   public void dataChanged(HttpPanelViewModelEvent event) {
-    // Don't auto-refresh request split parts (editors) as it can overwrite user edits
-    if (this.request && (this.bodyOnly || this.headerOnly)) {
-      return;
-    }
     this.scheduleRefresh();
   }
 
@@ -261,9 +244,7 @@ SearchableHttpPanelView {
     this.updateNotice(result);
     this.loading = true;
     JTextArea body = this.panel.getTextArea();
-    if (!(this.request && (this.bodyOnly || this.headerOnly))) {
-      body.setEditable(false);
-    }
+    body.setEditable(false);
     this.panel.beginLoad();
     ChunkedTextLoader.installDocument(body, document, this.panel::pinToTop, () -> {
       if (ticket != this.generation.get()) {
@@ -271,12 +252,7 @@ SearchableHttpPanelView {
       }
       this.lastFormatted = split.displayText();
       this.loading = false;
-      boolean allow = this.allowsEdits();
-      if (this.request && (this.bodyOnly || this.headerOnly)) {
-        allow = true;
-        body.setEditable(true);
-      }
-      this.panel.setEditable(allow);
+      this.panel.setEditable(this.allowsEdits());
       this.panel.endLoad();
     });
   }
@@ -401,10 +377,7 @@ SearchableHttpPanelView {
    * refuses anything it cannot parse back exactly. Everything else stays display-only.
    */
   private boolean allowsEdits() {
-    if (this.request && (this.bodyOnly || this.headerOnly)) {
-      return true;
-    }
-    return this.editable && (this.formatEditable || this.format == PayloadFormat.FORM_URLENCODED);
+    return this.isEditable() && (this.formatEditable || this.format == PayloadFormat.FORM_URLENCODED);
   }
 
   /**
@@ -547,47 +520,16 @@ SearchableHttpPanelView {
 
   @Override
   public boolean isEditable() {
-    // Split request parts (body/header) are used by editors - always editable
-    if (this.request && (this.bodyOnly || this.headerOnly)) {
-      return true;
-    }
-    // Check editor context for other cases
-    boolean inEditor = false;
-    java.awt.Container check = this.panel.getParent();
-    while (check != null) {
-      String cname = check.getClass().getName();
-      String name = check.getName();
-      if (cname.contains("Manual") || cname.contains("requester") || cname.contains("Requester") || cname.contains("Editor") || cname.contains("addon.requester") || cname.contains("MessageEditor") || (name != null && name.toLowerCase().contains("requester"))) {
-        inEditor = true;
-        break;
-      }
-      check = check.getParent();
-    }
-    if (this.request && !inEditor) {
-      return false;
-    }
+    // Follow the host panel like every core view: editable in the Manual Request Editor and
+    // Requester, read-only in the main viewer. Falls back to the host flag when setEditable
+    // has not been pushed yet.
     if (this.editable) {
       return true;
     }
     java.awt.Container parent = this.panel.getParent();
     while (parent != null) {
       if (parent instanceof org.zaproxy.zap.extension.httppanel.HttpPanel) {
-        boolean hostEditable = ((org.zaproxy.zap.extension.httppanel.HttpPanel) parent).isEditable();
-        // Also allow in editor windows
-        java.awt.Container pp = parent;
-        while (pp != null) {
-          String cname = pp.getClass().getName();
-          String pname = pp.getName();
-          if (cname.contains("Manual") || cname.contains("requester") || cname.contains("Requester") || cname.contains("Editor") || cname.contains("addon.requester") || (pname != null && (pname.toLowerCase().contains("requester") || pname.toLowerCase().contains("manual")))) {
-            return hostEditable;
-          }
-          pp = pp.getParent();
-        }
-        // If in split request part and host says editable, treat as editor-allowed
-        if (this.request && (this.bodyOnly || this.headerOnly) && hostEditable) {
-          return true;
-        }
-        return hostEditable;
+        return ((org.zaproxy.zap.extension.httppanel.HttpPanel) parent).isEditable();
       }
       parent = parent.getParent();
     }
@@ -596,36 +538,8 @@ SearchableHttpPanelView {
 
   @Override
   public void setEditable(boolean editable) {
-    // Request views stay editable everywhere. Only the send flows persist (Requester and the
-    // Manual Request Editor call saveData on send; nothing ever saves the main window panels),
-    // so an editable main-window view is harmless while every editor panel writes back on send.
-    // Response views keep following the host panel, like every core view.
-    // Allow in editor windows
-    boolean inEditor = false;
-    if (this.request && (this.bodyOnly || this.headerOnly)) {
-      inEditor = true;
-    }
-    java.awt.Container pp = this.panel.getParent();
-    while (pp != null) {
-      String cname = pp.getClass().getName();
-      String name = pp.getName();
-      if (cname.contains("Manual") || cname.contains("manual") || (cname.contains("Request") && (cname.contains("Editor") || cname.contains("er"))) || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend") || cname.contains("addon.requester") || cname.contains("org.zaproxy.addon.requester") || cname.contains("MessageEditorDialog") || cname.contains("RequesterPanel") || cname.contains("CustomHttpPanelRequest") || cname.contains("RequesterNumbered") || cname.contains("AbstractHttpMessageEditorDialog") || (name != null && (name.toLowerCase().contains("requester") || name.toLowerCase().contains("manual") || name.toLowerCase().contains("editor")))) {
-        inEditor = true;
-        break;
-      }
-      pp = pp.getParent();
-    }
-    // Only make request viewer read-only in non-editor contexts (main viewer)
-    if (!inEditor && this.request) {
-      editable = false;
-    } else if (inEditor && this.request) {
-      editable = true;
-    }
-    // Response views follow host as before (not modified)
+    // Follow the host panel like every core view; see isEditable.
     this.editable = editable;
-    if (inEditor && this.request) {
-      this.editable = true;
-    }
     if (!this.loading) {
       this.panel.setEditable(this.allowsEdits());
     }
