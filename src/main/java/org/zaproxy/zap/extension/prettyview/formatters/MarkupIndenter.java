@@ -314,16 +314,26 @@ final class MarkupIndenter {
       this.length += text.length();
     }
 
-    /** A line exactly as it stands, with no indentation added. */
-    void verbatimLine(String text) {
+    /**
+     * A content line at its block's level: non-blank lines take the current indent on top of
+     * whatever relative indentation they carry, so nested content reads at its depth; blank
+     * lines stay truly empty (no trailing spaces).
+     */
+    void contentLine(String text) {
       this.flush();
-      this.lines.add(text);
+      if (text.isEmpty()) {
+        this.lines.add(text);
+      } else {
+        String indented = this.indentOf() + text;
+        this.lines.add(indented);
+        this.length += this.indentOf().length();
+      }
       this.length += text.length();
     }
 
     /**
-     * Flows text inline: the first segment joins the open line, continuation lines go back
-     * verbatim, and a non-blank tail stays open so following inline content continues it.
+     * Flows text inline: the first segment joins the open line, continuation lines sit at the
+     * block's level, and a non-blank tail stays open so following inline content continues it.
      */
     void flowText(String text) {
       String[] segments = text.split("\n", -1);
@@ -332,12 +342,15 @@ final class MarkupIndenter {
         this.flush();
         if (i == segments.length - 1) {
           if (!segments[i].isEmpty()) {
-            this.cur = new StringBuilder(segments[i]);
-            this.length += segments[i].length();
+            this.cur = new StringBuilder(this.indentOf()).append(segments[i]);
+            this.length += this.indentOf().length() + segments[i].length();
           }
-        } else {
+        } else if (segments[i].isEmpty()) {
           this.lines.add(segments[i]);
-          this.length += segments[i].length();
+        } else {
+          String indented = this.indentOf() + segments[i];
+          this.lines.add(indented);
+          this.length += indented.length();
         }
       }
     }
@@ -550,7 +563,7 @@ final class MarkupIndenter {
     }
     String[] lines = content.split("\n", -1);
     for (String line : lines) {
-      flow.verbatimLine(line);
+      flow.contentLine(line);
     }
   }
 }
