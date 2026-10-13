@@ -1,14 +1,15 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+/**
+ * Whitespace-only GraphQL formatting. JSON envelopes (including batch arrays) are laid out by
+ * structure with every byte preserved; bare operations get brace-driven indentation. Nothing is
+ * ever synthesised: no wrapper lines, no member comments, no re-serialization.
+ */
 
 public class GraphQlPrettifier
 implements PrettyPrettifier {
@@ -27,72 +28,12 @@ implements PrettyPrettifier {
       throw new PrettificationException("Empty GraphQL payload");
     }
     String trimmed = body.trim();
-    if (trimmed.charAt(0) == '[') {
-      return this.formatEnvelope(GraphQlPrettifier.parse(trimmed), trimmed);
-    }
-    if (trimmed.charAt(0) == '{') {
-      // A leading brace is either a JSON envelope or an anonymous operation such as "{ hero { name } }".
-      // Only the former parses as JSON with a "query" member, so try that first and fall through to
-      // the operation formatter instead of failing on a perfectly good anonymous query.
-      JsonObject root = GraphQlPrettifier.parseObject(trimmed);
-      if (root != null && GraphQlPrettifier.asString(root, "query") != null) {
-        return this.formatEnvelope(root, trimmed);
-      }
-      return GraphQlPrettifier.formatOperation(trimmed);
+    if (trimmed.charAt(0) == '[' || trimmed.charAt(0) == '{') {
+      // A JSON envelope, a batch array, or an anonymous operation such as "{ hero { name } }":
+      // all lay out structurally with every byte preserved, so no envelope surgery is needed.
+      return this.jsonPrettifier.prettify(body);
     }
     return GraphQlPrettifier.formatOperation(trimmed);
-  }
-
-  private static JsonObject parseObject(String json) {
-    try {
-      JsonElement element = JsonParser.parseString(json);
-      return element.isJsonObject() ? element.getAsJsonObject() : null;
-    }
-    catch (JsonParseException | IllegalStateException e) {
-      return null;
-    }
-  }
-
-  private static JsonElement parse(String json) throws PrettificationException {
-    try {
-      return JsonParser.parseString(json);
-    }
-    catch (JsonParseException | IllegalStateException e) {
-      throw new PrettificationException("Malformed GraphQL JSON envelope", e);
-    }
-  }
-
-  private String formatEnvelope(JsonElement element, String json) throws PrettificationException {
-    if (!element.isJsonObject()) {
-      return this.jsonPrettifier.prettify(json);
-    }
-    JsonObject root = element.getAsJsonObject();
-    String query = GraphQlPrettifier.asString(root, "query");
-    if (query == null) {
-      return this.jsonPrettifier.prettify(json);
-    }
-    StringBuilder out = new StringBuilder();
-    out.append("query\n{\n");
-    out.append(GraphQlPrettifier.indent(GraphQlPrettifier.formatOperation(query)));
-    out.append("}\n");
-    ArrayList others = new ArrayList(root.keySet());
-    others.remove("query");
-    if (!others.isEmpty()) {
-      out.append('\n').append("// remaining members: ").append(String.join((CharSequence)", ", others)).append('\n');
-      root.remove("query");
-      if (!root.isEmpty()) {
-        out.append(this.jsonPrettifier.prettify(root.toString())).append('\n');
-      }
-    }
-    return out.toString();
-  }
-
-  private static String asString(JsonObject root, String member) {
-    JsonElement value = root.get(member);
-    if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
-      return null;
-    }
-    return value.getAsString();
   }
 
   private static String formatOperation(String operation) throws PrettificationException {
@@ -184,14 +125,6 @@ implements PrettyPrettifier {
     for (int i = 0; i < drawn; ++i) {
       out.append(PrettyPrettifier.INDENT);
     }
-  }
-
-  private static String indent(String text) {
-    StringBuilder out = new StringBuilder(text.length() + 32);
-    for (String line : text.split("\n")) {
-      out.append(PrettyPrettifier.INDENT).append(line).append('\n');
-    }
-    return out.toString();
   }
 
   public static boolean looksLikeGraphQl(String body) {

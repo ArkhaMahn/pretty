@@ -1,14 +1,17 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import org.zaproxy.zap.extension.prettyview.detect.ContentTypeSniffer;
 import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
 
+/**
+ * Multipart bodies with nothing invented: delimiter lines, part headers and framing pass through
+ * byte for byte, and only structured part bodies get a whitespace-only reformat (anything else,
+ * including plain text, goes back verbatim). In particular there are no part banners, no boundary
+ * echoes, no header trimming and no omission footers - every part is shown.
+ */
 public class MultipartPrettifier
 implements PrettyPrettifier {
-  private static final int MAX_PARTS = 500;
   /**
    * Deepest nesting of {@code multipart/*} inside {@code multipart/*} that is still prettified.
    * A nested part re-enters this same prettifier through the manager, so crafted nesting would
@@ -37,107 +40,130 @@ implements PrettyPrettifier {
       throw new PrettificationException("No multipart boundary found");
     }
     String delimiter = "--" + boundary;
-    String normalised = body.replace("\r\n", "\n");
-    ArrayList<String> chunks = new ArrayList<String>();
-    for (String chunk : MultipartPrettifier.split(normalised, delimiter)) {
-      if (chunk.isEmpty() || "--".equals(chunk.trim())) continue;
-      chunks.add(chunk);
-    }
-    int shown = Math.min(chunks.size(), 500);
-    StringBuilder out = new StringBuilder(Math.min(normalised.length() * 2, 65536));
-    out.append("multipart/form-data  (").append(shown).append(" part(s))\n");
-    out.append("boundary = ").append(boundary).append('\n');
-    int index = 0;
-    for (String chunk : chunks) {
-      if (index >= 500) {
-        out.append("... ").append(chunks.size() - 500).append(" further part(s) omitted\n");
-        break;
+    // Split keeping line endings out of the way but bytes intact: lines are rejoined with the
+    // same '\n' they were split on, and any '\r' stays at its line end for the display to render.
+    String[] lines = body.split("\n", -1);
+    StringBuilder out = new StringBuilder(body.length() + 64);
+    boolean inHeaders = false;
+    boolean inBody = false;
+    boolean seenDelimiter = false;
+    boolean closed = false;
+    StringBuilder partBody = new StringBuilder();
+    String partContentType = null;
+    for (String line : lines) {
+      if (!closed && MultipartPrettifier.isDelimiter(line, delimiter)) {
+        if (inBody) {
+          MultipartPrettifier.emitPartBody(out, partBody.toString(), partContentType, this);
+          partBody.setLength(0);
+          partContentType = null;
+          inBody = false;
+        }
+        if (MultipartPrettifier.isClosingDelimiter(line, delimiter)) {
+          closed = true;
+        }
+        inHeaders = true;
+        seenDelimiter = true;
+        MultipartPrettifier.emitLine(out, line);
+        continue;
       }
-      this.appendPart(out, chunk, ++index);
+      if (closed) {
+        // Epilogue after the closing delimiter passes through untouched.
+        MultipartPrettifier.emitLine(out, line);
+        continue;
+      }
+      if (!seenDelimiter) {
+        // Preamble: anything before the first delimiter passes through untouched.
+        MultipartPrettifier.emitLine(out, line);
+        continue;
+      }
+      if (inHeaders) {
+        MultipartPrettifier.emitLine(out, line);
+        if (line.trim().isEmpty()) {
+          inHeaders = false;
+          inBody = true;
+        } else {
+          String lower = line.toLowerCase(Locale.ROOT);
+          if (lower.startsWith("content-type:")) {
+            int colon = line.indexOf(':');
+            partContentType = colon < 0 ? "" : line.substring(colon + 1).trim();
+          }
+        }
+        continue;
+      }
+      if (inBody) {
+        if (partBody.length() > 0) {
+          partBody.append('\n');
+        }
+        partBody.append(line);
+        continue;
+      }
+      // Epilogue after the closing delimiter passes through untouched.
+      MultipartPrettifier.emitLine(out, line);
+    }
+    if (inBody) {
+      MultipartPrettifier.emitPartBody(out, partBody.toString(), partContentType, this);
     }
     return out.toString();
+  }
+
+  private static boolean isDelimiter(String line, String delimiter) {
+    String bare = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
+    return bare.equals(delimiter) || bare.equals(delimiter + "--");
+  }
+
+  private static boolean isClosingDelimiter(String line, String delimiter) {
+    String bare = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
+    return bare.equals(delimiter + "--");
+  }
+
+  /**
+   * Emits a part body: structured payloads get a whitespace-only reformat, everything else goes
+   * back verbatim. Plain text in particular is never folded here - its bytes are the payload.
+   */
+  private static void emitPartBody(
+      StringBuilder out, String partBody, String partContentType, MultipartPrettifier owner)
+      throws PrettificationException {
+    String text = partBody;
+    if (!text.trim().isEmpty() && owner.manager != null && owner.nestingDepth < MAX_NESTING_DEPTH) {
+      PayloadFormat format = ContentTypeSniffer.detect(partContentType, text.trim());
+      if (format != null && format != PayloadFormat.PLAIN_TEXT) {
+        ++owner.nestingDepth;
+        try {
+          text = owner.manager.prettifyBody(text, partContentType, format);
+        } finally {
+          --owner.nestingDepth;
+        }
+      }
+    }
+    if (out.length() > 0) {
+      out.append('\n');
+    }
+    out.append(text);
+    if (out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+      throw new PrettificationException("Formatted output exceeded its size cap; rendered verbatim");
+    }
+  }
+
+  private static void emitLine(StringBuilder out, String line) {
+    if (out.length() > 0) {
+      out.append('\n');
+    }
+    out.append(line);
   }
 
   private static String extractBoundary(String body) {
-    String candidate;
-    int firstLine = body.indexOf(10);
+    int firstLine = body.indexOf('\n');
     String head = firstLine < 0 ? body : body.substring(0, firstLine);
+    if (head.endsWith("\r")) {
+      head = head.substring(0, head.length() - 1);
+    }
     int marker = head.indexOf("--");
-    if (marker >= 0 && !(candidate = head.substring(marker + 2).trim()).isEmpty() && candidate.length() < 200) {
-      return candidate;
+    if (marker >= 0) {
+      String candidate = head.substring(marker + 2).trim();
+      if (!candidate.isEmpty() && candidate.length() < 200) {
+        return candidate;
+      }
     }
     return null;
   }
-
-  private static List<String> split(String body, String delimiter) {
-    ArrayList<String> parts = new ArrayList<String>();
-    int index = 0;
-    while (index < body.length()) {
-      int next = body.indexOf(delimiter, index);
-      if (next < 0) {
-        parts.add(body.substring(index));
-        break;
-      }
-      parts.add(body.substring(index, next));
-      index = next + delimiter.length();
-    }
-    return parts;
-  }
-
-  private void appendPart(StringBuilder out, String chunk, int index) {
-    String cleaned = chunk.startsWith("\n") ? chunk.substring(1) : chunk;
-    int separator = cleaned.indexOf("\n\n");
-    String headers = separator < 0 ? cleaned : cleaned.substring(0, separator);
-    String body = separator < 0 ? "" : cleaned.substring(separator + 2);
-    out.append("\n").append("=".repeat(Math.min(index, 20))).append(" Part ").append(index).append(' ').append("=".repeat(20)).append('\n');
-    String partContentType = null;
-    for (String line : headers.split("\n")) {
-      out.append(line.trim()).append('\n');
-      String lower = line.toLowerCase(Locale.ROOT);
-      if (!lower.startsWith("content-type:")) continue;
-      partContentType = line.substring(line.indexOf(58) + 1).trim();
-    }
-    out.append('\n');
-    out.append(this.formatBody(body, partContentType));
-  }
-
-  private String formatBody(String body, String partContentType) {
-    String trimmed = MultipartPrettifier.stripTrailingNewline(body);
-    if (trimmed.isEmpty() || this.manager == null) {
-      return trimmed.isEmpty() ? "" : trimmed + "\n";
-    }
-    if (this.nestingDepth >= MAX_NESTING_DEPTH) {
-      return trimmed + "\n";
-    }
-    PayloadFormat format = ContentTypeSniffer.detect(partContentType, trimmed);
-    ++this.nestingDepth;
-    try {
-      return MultipartPrettifier.indent(this.manager.prettifyBody(trimmed, partContentType, format));
-    } finally {
-      --this.nestingDepth;
-    }
-  }
-
-  private static String stripTrailingNewline(String value) {
-    int end = value.length();
-    while (end > 0 && value.charAt(end - 1) == '\n') {
-      --end;
-    }
-    return value.substring(0, end);
-  }
-
-  private static String indent(String text) {
-    if (text == null || text.isEmpty()) {
-      return "";
-    }
-    StringBuilder out = new StringBuilder(text.length() + 32);
-    for (String line : text.split("\n", -1)) {
-      if (!line.isEmpty()) {
-        out.append(PrettyPrettifier.INDENT).append(line);
-      }
-      out.append('\n');
-    }
-    return out.toString();
-  }
 }
-

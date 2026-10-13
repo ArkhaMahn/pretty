@@ -50,8 +50,6 @@ SearchableHttpPanelView {
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
-  /** The detected format of the loaded message; form posts take a dedicated save path. */
-  private PayloadFormat format;
   private String parentConfigurationKey;
   private String lastFormatted = "";
   private DisplayLineSplitter.Split split;
@@ -235,7 +233,6 @@ SearchableHttpPanelView {
     }
     PayloadFormat highlightFormat =
         this.prettifierManager.detectFormat(contentType, bodyForDetect);
-    this.format = highlightFormat;
     if (SwingUtilities.isEventDispatchThread()) {
       DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
       this.applyRawIfCurrent(ticket, split,
@@ -266,7 +263,6 @@ SearchableHttpPanelView {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
-    this.format = result.getFormat();
     this.updateNotice(result);
     this.installSplit(ticket, split, document);
   }
@@ -389,19 +385,10 @@ SearchableHttpPanelView {
     if (!this.isEditable()) {
       return;
     }
-    // Form posts take a dedicated path, but only outside raw mode: the prettified display is
-    // decoded and annotated, so it is strictly re-parsed and re-encoded instead of persisted
-    // raw. Anything unparseable (truncation notes, multiline values, free text) refuses the save
-    // and the message is left untouched. In raw mode (any editable view) the display already is
-    // the wire bytes, so it saves through the plain path below like every other format.
-    if (this.format == PayloadFormat.FORM_URLENCODED && !this.isEditable()) {
-      if (this.model.setFormData(current)) {
-        this.lastFormatted = current;
-      }
-      return;
-    }
     // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
     // then persist through the model like every core text view (see PrettyViewModel.setData).
+    // The display holds wire bytes in every mode - raw in editors, faithfully laid out
+    // elsewhere - so there is no decoded form to re-encode here.
     String formatted = this.split == null ? current : this.split.toOriginal(current);
     this.model.setData(formatted);
     this.lastFormatted = current;
