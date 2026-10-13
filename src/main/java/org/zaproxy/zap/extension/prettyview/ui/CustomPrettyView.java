@@ -525,6 +525,10 @@ SearchableHttpPanelView {
   public boolean isEditable() {
     // Check editor context
     boolean inEditor = false;
+    // Split parts are typically used by editors (MRE/Requester)
+    if (this.request && (this.bodyOnly || this.headerOnly)) {
+      inEditor = true;
+    }
     java.awt.Container check = this.panel.getParent();
     while (check != null) {
       if (check instanceof java.awt.Window) {
