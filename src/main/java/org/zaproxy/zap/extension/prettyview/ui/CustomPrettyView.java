@@ -113,7 +113,7 @@ SearchableHttpPanelView {
     if (request && !inEditorInit) {
       this.editable = false;
     } else {
-      this.editable = request;
+      this.editable = true;
     }
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
