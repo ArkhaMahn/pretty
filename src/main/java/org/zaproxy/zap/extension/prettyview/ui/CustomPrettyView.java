@@ -166,7 +166,6 @@ SearchableHttpPanelView {
       return;
     }
     this.panel.showLoading(CustomPrettyView.sizeHint(raw.length()));
-    Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
     if (this.bodyOnly) {
       this.headerLength = 0;
       this.bodyEmpty = raw.isEmpty();
@@ -178,6 +177,15 @@ SearchableHttpPanelView {
       // detector can only report PLAIN_TEXT for it.
       this.bodyEmpty = parts.getBody().isEmpty();
     }
+    if (this.request && this.isEditable()) {
+      // Edit/write mode (Manual Request Editor, Requester): show the raw wire bytes, never
+      // prettified. Probes are often deliberately malformed to test server responses, and any
+      // reformatting would mangle them - both on display and, worse, in save(), which persists
+      // the display text. Read-only views and all responses keep prettifying below.
+      this.applyRawOnEdt(ticket, raw, contentType);
+      return;
+    }
+    Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
     this.worker.submit(raw, contentType, this.bodyOnly, this.prettifierManager, onResult);
   }
 
@@ -214,19 +222,63 @@ SearchableHttpPanelView {
     }
   }
 
+  /**
+   * Shows raw wire bytes in an editable request view: no prettifier runs, so deliberately
+   * malformed probes reach the server exactly as typed. The format is still detected, but only
+   * to pick syntax highlighting. The prettify threshold is bypassed on purpose - an editor must
+   * show the whole message to edit it, exactly like the core text views.
+   */
+  private void applyRawOnEdt(int ticket, String raw, String contentType) {
+    String bodyForDetect = raw;
+    if (!this.bodyOnly && !this.headerOnly) {
+      bodyForDetect = MessageSplitter.split(raw).getBody();
+    }
+    PayloadFormat highlightFormat =
+        this.prettifierManager.detectFormat(contentType, bodyForDetect);
+    this.format = highlightFormat;
+    if (SwingUtilities.isEventDispatchThread()) {
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
+      this.applyRawIfCurrent(ticket, split,
+          ChunkedTextLoader.buildDocument(split.displayText(),
+              LargePayloadPolicy.syntaxStyleFor(split, highlightFormat),
+              () -> ticket == this.generation.get()));
+    } else {
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
+      String style = LargePayloadPolicy.syntaxStyleFor(split, highlightFormat);
+      RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
+          () -> ticket == this.generation.get());
+      SwingUtilities.invokeLater(() -> this.applyRawIfCurrent(ticket, split, document));
+    }
+  }
+
+  private void applyRawIfCurrent(
+      int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
+    if (ticket != this.generation.get() || document == null) {
+      return;
+    }
+    // Raw mode carries no prettifier notes; clear any stale notice (and the loading spinner).
+    this.panel.clearNotice();
+    this.installSplit(ticket, split, document);
+  }
+
   private void applyIfCurrent(
       int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document) {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
     this.format = result.getFormat();
+    this.updateNotice(result);
+    this.installSplit(ticket, split, document);
+  }
+
+  /** Installs a built document into the editor; shared by the prettified and raw paths. */
+  private void installSplit(int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
     this.split = split;
     this.panel.setSplit(split);
     // The editor is given the split text and so is judged on the split text. Deciding from the formatted
     // text instead would read a 54 331-char line off a document that no longer holds one, and would strip
     // the highlighting off a payload whose every line now fits in a screenful.
     LargePayloadPolicy.applyForSize(this.textArea, split);
-    this.updateNotice(result);
     this.loading = true;
     JTextArea body = this.panel.getTextArea();
     body.setEditable(false);
@@ -333,15 +385,16 @@ SearchableHttpPanelView {
     }
     // Only an editable view writes back. Requests edit wherever the host allows (the main
     // viewer host is read-only, the Manual Request Editor and Requester hosts are editable);
-    // responses follow the host too. Multipart and CSV never write back even when the host
-    // is editable: their decorations have no safe trip back to wire bytes.
+    // responses follow the host too.
     if (!this.isEditable()) {
       return;
     }
-    // Form posts take a dedicated path: the display is decoded and annotated, so it is strictly
-    // re-parsed and re-encoded instead of persisted raw. Anything unparseable (truncation notes,
-    // multiline values, free text) refuses the save and the message is left untouched.
-    if (this.format == PayloadFormat.FORM_URLENCODED) {
+    // Form posts take a dedicated path, but only outside raw mode: the prettified display is
+    // decoded and annotated, so it is strictly re-parsed and re-encoded instead of persisted
+    // raw. Anything unparseable (truncation notes, multiline values, free text) refuses the save
+    // and the message is left untouched. In raw mode (editable requests) the display already is
+    // the wire bytes, so it saves through the plain path below like every other format.
+    if (this.format == PayloadFormat.FORM_URLENCODED && !(this.request && this.isEditable())) {
       if (this.model.setFormData(current)) {
         this.lastFormatted = current;
       }
@@ -349,8 +402,6 @@ SearchableHttpPanelView {
     }
     // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
     // then persist through the model like every core text view (see PrettyViewModel.setData).
-    // Every format writes back, including decorated ones (multipart banners, padded CSV cells):
-    // what you see is what is sent. Form posts take the dedicated path above instead.
     String formatted = this.split == null ? current : this.split.toOriginal(current);
     this.model.setData(formatted);
     this.lastFormatted = current;
