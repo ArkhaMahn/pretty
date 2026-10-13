@@ -589,6 +589,9 @@ SearchableHttpPanelView {
     // Response views keep following the host panel, like every core view.
     // Allow in editor windows
     boolean inEditor = false;
+    if (this.request && (this.bodyOnly || this.headerOnly)) {
+      inEditor = true;
+    }
     java.awt.Container pp = this.panel.getParent();
     while (pp != null) {
       String cname = pp.getClass().getName();
