@@ -1,26 +1,18 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonIOException;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
-import com.google.gson.stream.JsonWriter;
-import java.io.IOException;
-import java.io.StringWriter;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
+/**
+ * Indentation-only JSON formatting. The input is scanned token by token - strings verbatim and
+ * escape-aware, structural characters driving newlines and indentation, everything else copied -
+ * but no byte is ever added, removed, moved or rewritten: numbers keep their spelling ({@code
+ * 1e2} stays {@code 1e2}), escape sequences and key order survive untouched, and unbalanced input
+ * is still laid out structurally instead of failing. A parse-and-reserialize round-trip would
+ * instead normalise all of that - exactly the rewriting this view must not do to responses under
+ * analysis.
+ */
 public class JsonPrettifier
 implements PrettyPrettifier {
-  private static final Pattern JSONP = Pattern.compile("^\\s*([\\w$.\\[\\]'\"\\-]+)\\s*\\((.*)\\)\\s*;?\\s*$", 32);
-  /**
-   * Used only to serialise. The indent is not this object's to set: {@code toJson} copies its own
-   * htmlSafe and serializeNulls settings onto whatever writer it is handed, but leaves the writer's
-   * indent alone, which is how {@link #writePretty} supplies {@link PrettyPrettifier#INDENT}.
-   */
-  private static final Gson GSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().create();
+  /** Deepest nesting that is still laid out; deeper input goes back verbatim. */
+  private static final int MAX_DEPTH = 256;
 
   @Override
   public PrettyPrettifier.SupportedFormat getSupportedFormat() {
@@ -29,61 +21,128 @@ implements PrettyPrettifier {
 
   @Override
   public String prettify(String body) throws PrettificationException {
-    String payload = JsonPrettifier.unwrapJsonp(body);
-    if (payload == null) {
-      payload = body;
-    }
-    if (payload.trim().isEmpty()) {
+    if (body == null || body.trim().isEmpty()) {
       throw new PrettificationException("Empty JSON payload");
     }
-    try {
-      JsonElement element = JsonParser.parseString((String)payload);
-      if (element == null || element.isJsonNull()) {
-        throw new PrettificationException("JSON payload is null");
+    StringBuilder out = new StringBuilder(body.length() + 64);
+    int indent = 0;
+    int length = body.length();
+    int i = 0;
+    boolean lineHasContent = false;
+    while (i < length) {
+      char c = body.charAt(i);
+      if (c == '"') {
+        int end = JsonPrettifier.scanString(body, i);
+        JsonPrettifier.separate(out, indent, lineHasContent);
+        out.append(body, i, end);
+        lineHasContent = true;
+        i = end;
+      } else if (c == '{' || c == '[') {
+        if (JsonPrettifier.isEmptyPair(body, i)) {
+          JsonPrettifier.separate(out, indent, lineHasContent);
+          out.append(c).append(body.charAt(JsonPrettifier.nextNonWhitespace(body, i + 1)));
+          lineHasContent = true;
+          i = JsonPrettifier.nextNonWhitespace(body, i + 1) + 1;
+          continue;
+        }
+        JsonPrettifier.separate(out, indent, lineHasContent);
+        out.append(c);
+        lineHasContent = false;
+        ++indent;
+        if (indent > MAX_DEPTH) {
+          throw new PrettificationException("JSON nests too deeply; rendered verbatim");
+        }
+        ++i;
+      } else if (c == '}' || c == ']') {
+        indent = Math.max(0, indent - 1);
+        JsonPrettifier.newline(out, indent);
+        out.append(c);
+        lineHasContent = true;
+        ++i;
+      } else if (c == ',') {
+        out.append(c);
+        lineHasContent = false;
+        ++i;
+      } else if (c == ':') {
+        out.append(c).append(' ');
+        ++i;
+      } else if (Character.isWhitespace(c)) {
+        ++i;
+      } else {
+        if (!lineHasContent) {
+          JsonPrettifier.newline(out, indent);
+        }
+        out.append(c);
+        lineHasContent = true;
+        ++i;
       }
-      return JsonPrettifier.writePretty(element);
-    }
-    catch (JsonParseException | IllegalStateException e) {
-      throw new PrettificationException("Malformed JSON: " + JsonPrettifier.rootMessage(e), e);
-    }
-  }
-
-  /**
-   * Serialises at {@link PrettyPrettifier#INDENT} rather than Gson's own two spaces: {@code
-   * setPrettyPrinting} hardcodes them and exposes no setting, so the indent goes on the writer, which
-   * Gson copies its own htmlSafe and serializeNulls flags onto but leaves the indent alone.
-   */
-  private static String writePretty(JsonElement element) throws PrettificationException {
-    StringWriter out = new StringWriter();
-    try (JsonWriter writer = new JsonWriter(out)) {
-      writer.setIndent(PrettyPrettifier.INDENT);
-      JsonPrettifier.GSON.toJson(element, writer);
-    }
-    catch (IOException | JsonIOException e) {
-      throw new PrettificationException("Cannot write JSON payload", e);
+      if (out.length() > PrettyPrettifier.MAX_OUTPUT_CHARS) {
+        throw new PrettificationException("Formatted output exceeded its size cap; rendered verbatim");
+      }
     }
     return out.toString();
   }
 
-  private static String unwrapJsonp(String body) {
-    Matcher matcher = JSONP.matcher(body);
-    if (!matcher.matches()) {
-      return null;
+  /**
+   * Index just past the closing quote of the string starting at {@code index}, honouring
+   * backslash escapes; the end of input when the string never terminates.
+   */
+  private static int scanString(String body, int index) {
+    int length = body.length();
+    int i = index + 1;
+    while (i < length) {
+      char c = body.charAt(i);
+      if (c == '\\') {
+        i += 2;
+        continue;
+      }
+      if (c == '"') {
+        return i + 1;
+      }
+      ++i;
     }
-    String callback = matcher.group(1);
-    if (callback.isEmpty() || !callback.matches("^[\\w$.]+$")) {
-      return null;
-    }
-    String inner = matcher.group(2).trim();
-    if (!inner.startsWith("{") && !inner.startsWith("[")) {
-      return null;
-    }
-    return inner;
+    return length;
   }
 
-  private static String rootMessage(Throwable throwable) {
-    String message = throwable.getMessage();
-    return message == null || message.isEmpty() ? throwable.getClass().getSimpleName() : message;
+  /** Index of the next non-whitespace character at or after {@code index}, or the length. */
+  private static int nextNonWhitespace(String body, int index) {
+    int length = body.length();
+    int i = index;
+    while (i < length && Character.isWhitespace(body.charAt(i))) {
+      ++i;
+    }
+    return i;
+  }
+
+  /** True when the bracket at {@code index} closes immediately ({@code {}} or {@code []}). */
+  private static boolean isEmptyPair(String body, int index) {
+    char open = body.charAt(index);
+    int next = JsonPrettifier.nextNonWhitespace(body, index + 1);
+    if (next >= body.length()) {
+      return false;
+    }
+    char close = body.charAt(next);
+    return open == '{' && close == '}' || open == '[' && close == ']';
+  }
+
+  private static void newline(StringBuilder out, int indent) {
+    if (out.length() > 0) {
+      out.append('\n');
+    }
+    out.append(PrettyPrettifier.INDENT.repeat(Math.min(indent, PrettyPrettifier.MAX_INDENT_DEPTH)));
+  }
+
+  /**
+   * Separates the next value from whatever precedes it: a single space when the line already
+   * carries content (unless one is there), otherwise a fresh indented line.
+   */
+  private static void separate(StringBuilder out, int indent, boolean lineHasContent) {
+    if (lineHasContent) {
+      if (out.length() > 0 && out.charAt(out.length() - 1) != ' ') {
+        out.append(' ');
+      }
+    } else {
+      JsonPrettifier.newline(out, indent);
+    }
   }
 }
-

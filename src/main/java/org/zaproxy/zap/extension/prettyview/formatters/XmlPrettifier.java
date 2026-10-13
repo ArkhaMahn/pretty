@@ -1,31 +1,21 @@
 package org.zaproxy.zap.extension.prettyview.formatters;
 
-import java.io.IOException;
-import java.io.StringReader;
-import java.io.StringWriter;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.regex.Pattern;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
-import org.w3c.dom.Document;
-import org.xml.sax.InputSource;
-import org.xml.sax.SAXException;
+import java.util.Collections;
+import java.util.HashSet;
 
+/**
+ * Indentation-only XML formatting. The input is tokenised into tags and text and laid out with
+ * newlines and indentation, but no byte is ever added, removed, moved or rewritten: the {@code
+ * <?xml?>} prolog, empty-element spellings and entity references all survive untouched, and
+ * malformed input is still laid out structurally instead of failing. A DOM round-trip would
+ * instead drop the prolog and normalise the markup - exactly the rewriting this view must not do
+ * to responses under analysis.
+ */
 public class XmlPrettifier
 implements PrettyPrettifier {
-  private static final String INDENT_AMOUNT = Integer.toString(PrettyPrettifier.INDENT_WIDTH);
-  private static final Pattern ENTITY_DECLARATION = Pattern.compile("<!\\s*ENTITY", 2);
   /**
-   * Deepest element nesting that is still pretty-printed. The serializer indents every level, so
-   * pathological nesting unfolds into hundreds of megabytes; data XML legitimately nests deeper
-   * than HTML, hence the roomier budget, and anything past it goes back verbatim.
+   * Deepest nesting that is still laid out. Data XML legitimately nests deeper than HTML, hence
+   * the roomier budget; anything past it goes back verbatim.
    */
   private static final int MAX_ELEMENT_DEPTH = 1024;
 
@@ -36,99 +26,14 @@ implements PrettyPrettifier {
 
   @Override
   public String prettify(String body) throws PrettificationException {
-    if (body == null || body.trim().isEmpty()) {
-      throw new PrettificationException("Empty XML payload");
-    }
-    if (ENTITY_DECLARATION.matcher(body).find()) {
-      throw new PrettificationException("XML declares internal entities; rendered verbatim to avoid resolving them");
-    }
-    Document document = XmlPrettifier.parse(body);
-    if (XmlPrettifier.elementDepth(document.getDocumentElement()) > MAX_ELEMENT_DEPTH) {
-      throw new PrettificationException("XML nests too deeply; rendered verbatim");
-    }
-    String formatted = XmlPrettifier.transform(document);
-    if (formatted == null || formatted.trim().isEmpty()) {
-      throw new PrettificationException("XML transformation produced no output");
-    }
-    return formatted;
-  }
-
-  private static Document parse(String body) throws PrettificationException {
-    try {
-      DocumentBuilder builder = XmlPrettifier.newDocumentBuilder();
-      return builder.parse(new InputSource(new StringReader(body)));
-    }
-    catch (IOException | IllegalArgumentException | ParserConfigurationException | SAXException e) {
-      throw new PrettificationException("Malformed XML: " + XmlPrettifier.describe(e), e);
-    }
-  }
-
-  private static DocumentBuilder newDocumentBuilder() throws ParserConfigurationException {
-    DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-    factory.setNamespaceAware(true);
-    factory.setExpandEntityReferences(false);
-    factory.setFeature("http://javax.xml.XMLConstants/feature/secure-processing", true);
-    factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-    factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-    factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalDTD", "");
-    factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalSchema", "");
-    return factory.newDocumentBuilder();
-  }
-
-  private static String transform(Document document) throws PrettificationException {
-    try {
-      TransformerFactory factory = TransformerFactory.newInstance();
-      factory.setFeature("http://javax.xml.XMLConstants/feature/secure-processing", true);
-      factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalDTD", "");
-      factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalStylesheet", "");
-      Transformer transformer = factory.newTransformer();
-      transformer.setOutputProperty("indent", "yes");
-      transformer.setOutputProperty("encoding", "UTF-8");
-      transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", INDENT_AMOUNT);
-      transformer.setOutputProperty("omit-xml-declaration", "yes");
-      StringWriter writer = new StringWriter(1024);
-      transformer.transform(new DOMSource(document), new StreamResult(writer));
-      return writer.toString();
-    }
-    catch (IllegalArgumentException | TransformerException e) {
-      throw new PrettificationException("Unable to format XML: " + XmlPrettifier.describe(e), e);
-    }
-  }
-
-  /**
-   * Deepest element nesting under {@code root}, walked iteratively so adversarial input cannot
-   * overflow the stack getting here.
-   */
-  private static int elementDepth(org.w3c.dom.Node root) {
-    Deque<org.w3c.dom.Node> nodes = new ArrayDeque<org.w3c.dom.Node>();
-    Deque<Integer> depths = new ArrayDeque<Integer>();
-    nodes.push(root);
-    depths.push(Integer.valueOf(0));
-    int deepest = 0;
-    while (!nodes.isEmpty()) {
-      org.w3c.dom.Node node = nodes.pop();
-      int depth = depths.pop().intValue();
-      if (depth > deepest) {
-        deepest = depth;
-        if (deepest > MAX_ELEMENT_DEPTH) {
-          return deepest;
-        }
-      }
-      org.w3c.dom.NodeList children = node.getChildNodes();
-      for (int i = 0; i < children.getLength(); ++i) {
-        org.w3c.dom.Node child = children.item(i);
-        if (child.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {
-          nodes.push(child);
-          depths.push(Integer.valueOf(depth + 1));
-        }
-      }
-    }
-    return deepest;
-  }
-
-  private static String describe(Exception e) {
-    String message = e.getMessage();
-    return message == null || message.isEmpty() ? e.getClass().getSimpleName() : message;
+    // XML has no void elements and no raw-text elements: every element closes explicitly, and
+    // CDATA sections, comments and processing instructions are tokenised as special blocks.
+    return MarkupIndenter.format(
+        body,
+        new HashSet<String>(),
+        new HashSet<String>(),
+        Collections.<String, MarkupIndenter.BlockFormatter>emptyMap(),
+        false,
+        MAX_ELEMENT_DEPTH);
   }
 }
-
