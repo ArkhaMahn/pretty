@@ -563,13 +563,16 @@ SearchableHttpPanelView {
         // Also allow in editor windows
         java.awt.Container pp = parent;
         while (pp != null) {
-          if (pp instanceof java.awt.Window) {
-            java.awt.Window w = (java.awt.Window) pp;
-            if (w.getClass().getName().contains("ManualRequest") || w.getClass().getName().contains("Requester")) {
-              return true;
-            }
+          String cname = pp.getClass().getName();
+          String pname = pp.getName();
+          if (cname.contains("Manual") || cname.contains("requester") || cname.contains("Requester") || cname.contains("Editor") || cname.contains("addon.requester") || (pname != null && (pname.toLowerCase().contains("requester") || pname.toLowerCase().contains("manual")))) {
+            return hostEditable;
           }
           pp = pp.getParent();
+        }
+        // If in split request part and host says editable, treat as editor-allowed
+        if (this.request && (this.bodyOnly || this.headerOnly) && hostEditable) {
+          return true;
         }
         return hostEditable;
       }
