@@ -103,12 +103,7 @@ SearchableHttpPanelView {
     // only the send flows persist it, so the main window (which never saves) stays harmless while
     // Requester and the Manual Request Editor write back on send. Split views take editability
     // from the host panel through the core addComponent/addView pushes, like every core view.
-    // Main request viewer (combined, not split) is read-only; split parts follow host
-    if (this.request && !this.bodyOnly && !this.headerOnly) {
-      this.editable = false;
-    } else {
-      this.editable = request;
-    }
+    this.editable = request;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
@@ -526,12 +521,37 @@ SearchableHttpPanelView {
   @Override
   public boolean isEditable() {
     if (this.editable) {
+      // Allow editing in Manual Request Editor/Requester contexts even if we marked read-only
+      java.awt.Container p = this.panel.getParent();
+      while (p != null) {
+        if (p instanceof java.awt.Window) {
+          String title = ((java.awt.Window) p).getTitle();
+          if (title != null && (title.contains("Manual Request Editor") || title.contains("Requester"))) {
+            return true;
+          }
+        }
+        p = p.getParent();
+      }
+    }
+    if (this.editable) {
       return true;
     }
     java.awt.Container parent = this.panel.getParent();
     while (parent != null) {
       if (parent instanceof org.zaproxy.zap.extension.httppanel.HttpPanel) {
-        return ((org.zaproxy.zap.extension.httppanel.HttpPanel) parent).isEditable();
+        boolean hostEditable = ((org.zaproxy.zap.extension.httppanel.HttpPanel) parent).isEditable();
+        // Also allow in editor windows
+        java.awt.Container pp = parent;
+        while (pp != null) {
+          if (pp instanceof java.awt.Window) {
+            String title = ((java.awt.Window) pp).getTitle();
+            if (title != null && (title.contains("Manual Request Editor") || title.contains("Requester"))) {
+              return hostEditable || true;
+            }
+          }
+          pp = pp.getParent();
+        }
+        return hostEditable;
       }
       parent = parent.getParent();
     }
@@ -540,11 +560,11 @@ SearchableHttpPanelView {
 
   @Override
   public void setEditable(boolean editable) {
-    // Main request viewer (combined) stays read-only. Split views (MRE/Requester) follow host
-    // but preserve existing behavior: request split parts stay editable if host allows.
-    if (this.request && !this.bodyOnly && !this.headerOnly) {
-      editable = false;
-    } else if (this.request && !editable) {
+    // Request views stay editable everywhere. Only the send flows persist (Requester and the
+    // Manual Request Editor call saveData on send; nothing ever saves the main window panels),
+    // so an editable main-window view is harmless while every editor panel writes back on send.
+    // Response views keep following the host panel, like every core view.
+    if (this.request && !editable) {
       editable = true;
     }
     this.editable = editable;
