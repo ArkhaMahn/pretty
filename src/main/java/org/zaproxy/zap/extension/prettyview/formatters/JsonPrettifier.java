@@ -29,6 +29,16 @@ implements PrettyPrettifier {
     int length = body.length();
     int i = 0;
     boolean lineHasContent = false;
+    // An XSSI guard (Google's ")]}'" prefix) is not JSON: keep its line verbatim and lay out
+    // only what follows, instead of exploding the guard across lines as stray closers.
+    if (body.startsWith(")]}'")) {
+      int newline = body.indexOf('\n');
+      if (newline < 0) {
+        return body;
+      }
+      out.append(body, 0, newline);
+      i = newline + 1;
+    }
     while (i < length) {
       char c = body.charAt(i);
       if (c == '"') {
@@ -126,7 +136,8 @@ implements PrettyPrettifier {
   }
 
   private static void newline(StringBuilder out, int indent) {
-    if (out.length() > 0) {
+    // Idempotent: a pending line break (left by the XSSI guard above) is not doubled.
+    if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') {
       out.append('\n');
     }
     out.append(PrettyPrettifier.INDENT.repeat(Math.min(indent, PrettyPrettifier.MAX_INDENT_DEPTH)));
