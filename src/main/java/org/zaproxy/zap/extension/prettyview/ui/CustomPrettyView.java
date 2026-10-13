@@ -587,12 +587,10 @@ SearchableHttpPanelView {
     boolean inEditor = false;
     java.awt.Container pp = this.panel.getParent();
     while (pp != null) {
-      if (pp instanceof java.awt.Window) {
-        String cname = pp.getClass().getName();
-        if (cname.contains("Manual") || cname.contains("manual") || (cname.contains("Request") && (cname.contains("Editor") || cname.contains("er"))) || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend") || cname.contains("addon.requester") || cname.contains("org.zaproxy.addon.requester") || cname.contains("MessageEditorDialog") || cname.contains("RequesterPanel")) {
-          inEditor = true;
-          break;
-        }
+      String cname = pp.getClass().getName();
+      if (cname.contains("Manual") || cname.contains("manual") || (cname.contains("Request") && (cname.contains("Editor") || cname.contains("er"))) || cname.contains("requester") || cname.contains("Requester") || cname.contains("MessageEditor") || cname.contains("ManualHttp") || cname.contains("HttpRequestEditor") || cname.contains("Resend") || cname.contains("addon.requester") || cname.contains("org.zaproxy.addon.requester") || cname.contains("MessageEditorDialog") || cname.contains("RequesterPanel") || cname.contains("CustomHttpPanelRequest") || cname.contains("RequesterNumbered") || cname.contains("AbstractHttpMessageEditorDialog")) {
+        inEditor = true;
+        break;
       }
       pp = pp.getParent();
     }
