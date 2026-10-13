@@ -11,12 +11,6 @@ description = "Pretty view for the HTTP Request and HTTP Response panels: auto-d
 
 repositories { mavenCentral() }
 
-dependencies {
-    // Vendored so the packaged add-on can shade them; both match the versions the add-on shipped with.
-    implementation(files("lib/jsoup-1.17.2.jar"))
-    implementation(files("lib/gson-2.11.0.jar"))
-}
-
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17

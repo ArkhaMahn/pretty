@@ -59,11 +59,6 @@ SearchableHttpPanelView {
    */
   private int headerLength;
   /**
-   * Whether the loaded message carries no body. A bodyless combined view shows only headers, so
-   * it edits like a header view even when the detector reports {@code PLAIN_TEXT}.
-   */
-  private boolean bodyEmpty;
-  /**
    * Whether this view is hosted by a split (Header/Body) component, which hands it the body alone
    * rather than the whole message. Such a view claims no header region and writes back only the
    * body, or the header/body split would blank the request line.
@@ -71,8 +66,8 @@ SearchableHttpPanelView {
   private final boolean bodyOnly;
   /**
    * Whether this view is hosted by a split component's header pane, which hands it the headers
-   * alone. Header text is verbatim wire content and the save parses it strictly (a bad edit leaves
-   * the message untouched, exactly like the core header text views), so it is always editable.
+   * alone. Header text is verbatim wire content, saved through the strict header parse like the
+   * core header text views.
    */
   private final boolean headerOnly;
 
@@ -91,8 +86,8 @@ SearchableHttpPanelView {
     this.bodyOnly = bodyOnly;
     this.headerOnly = headerOnly;
     // Editability follows the host panel like every core view: the main viewer (non-editable
-    // host) stays read-only while the Manual Request Editor and Requester (editable hosts)
-    // stay editable. No forcing here; HttpPanel pushes its flag via setEditable on creation.
+    // host) stays read-only while the Manual Request Editor, Requester and Break (editable
+    // hosts) stay editable. No forcing here; HttpPanel pushes its flag via setEditable.
     this.editable = false;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
@@ -166,14 +161,9 @@ SearchableHttpPanelView {
     this.panel.showLoading(CustomPrettyView.sizeHint(raw.length()));
     if (this.bodyOnly) {
       this.headerLength = 0;
-      this.bodyEmpty = raw.isEmpty();
     } else {
       MessageSplitter.Parts parts = MessageSplitter.split(raw);
       this.headerLength = parts.getHeaders().length();
-      // A bodyless message (the common GET) is effectively a header editor: the text is verbatim
-      // wire content saved through the strict header parse, so it is safe to edit even though the
-      // detector can only report PLAIN_TEXT for it.
-      this.bodyEmpty = parts.getBody().isEmpty();
     }
     if (this.isEditable()) {
       // Edit/write mode (Manual Request Editor, Requester, Break): show the raw wire bytes,
@@ -194,7 +184,6 @@ SearchableHttpPanelView {
       }
       this.panel.clearNotice();
       this.headerLength = 0;
-      this.bodyEmpty = true;
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
           DisplayLineSplitter.split(""),
           ChunkedTextLoader.buildDocument("", "text/plain", () -> ticket == this.generation.get()));
