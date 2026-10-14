@@ -201,37 +201,21 @@ extends JPanel {
     if (!(message instanceof HttpMessage)) {
       return;
     }
-    MainPopupMenu popup;
     PopupMenuInvokerWrapper wrapper;
+    List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
     try {
       View view = View.getSingleton();
-      if (view == null) {
+      if (view == null || view.getPopupList() == null) {
         return;
       }
-      popup = view.getPopupMenu();
       MessageContainer<?> container = new DefaultSingleHttpMessageContainer(
           HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
           this.textArea,
           (HttpMessage) message);
       wrapper = PopupMenuUtils.getPopupMenuInvokerWrapper(container);
+      PrettyViewPanel.collectEnabledItems(view.getPopupList(), wrapper, enabled);
     } catch (RuntimeException e) {
       return;
-    }
-    List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
-    for (Component component : popup.getComponents()) {
-      if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
-        continue;
-      }
-      ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
-      boolean on;
-      try {
-        on = wrapper.isEnable(item);
-      } catch (RuntimeException e) {
-        continue;
-      }
-      if (on && !TEXT_OP_LABELS.contains(item.getText())) {
-        enabled.add(item);
-      }
     }
     if (enabled.isEmpty()) {
       return;
@@ -268,6 +252,43 @@ extends JPanel {
     }
     PopupMenuUtils.removeConsecutiveSeparators(menu);
     PopupMenuUtils.removeTopAndBottomSeparators(menu);
+  }
+
+  /**
+   * Collects the enabled message actions from ZAP's registered popup items, recursing into
+   * submenu roots. Reads the stable registration list (not the live menu's children, which only
+   * exist while a menu is showing), so the tail is complete on every show.
+   */
+  private static void collectEnabledItems(
+      List<? extends Component> components,
+      PopupMenuInvokerWrapper wrapper,
+      List<ExtensionPopupMenuItem> enabled) {
+    for (Component component : components) {
+      if (component instanceof JMenu && !(component instanceof ExtensionPopupMenuItem)) {
+        // Submenu roots keep their children in their popup, not in themselves.
+        collectEnabledItems(
+            java.util.Arrays.asList(((JMenu) component).getPopupMenu().getComponents()),
+            wrapper,
+            enabled);
+        continue;
+      }
+      if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
+        continue;
+      }
+      ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
+      boolean on;
+      try {
+        on = wrapper.isEnable(item);
+      } catch (RuntimeException e) {
+        continue;
+      }
+      if (on
+          && item.getText() != null
+          && !item.getText().isEmpty()
+          && !TEXT_OP_LABELS.contains(item.getText())) {
+        enabled.add(item);
+      }
+    }
   }
 
   /** Labels RSyntax's own popup already provides; never duplicated from ZAP's popup. */
