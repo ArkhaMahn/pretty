@@ -17,6 +17,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.awt.event.MouseWheelListener;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import javax.swing.AbstractAction;
@@ -263,8 +264,57 @@ extends JPanel {
         return;
       }
       MainPopupMenu popup = view.getPopupMenu();
-      // Ask the popup menu to populate our menu with its items
-      popup.show(container, 0, 0); // This will add items to our menu via the framework
+      // Create a temporary menu to capture the ZAP items, then filter out duplicates
+      JMenu tempMenu = new JMenu();
+      popup.show(new DefaultSingleHttpMessageContainer(
+          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME, this.textArea, httpMessage), 0, 0);
+      // The show() method populates the tempMenu via the framework - but we need a different approach
+      // Instead, manually add the ZAP message actions that aren't our text operations
+      Set<String> excludedNames = Set.of(
+          "Copy", "Cut", "Paste", "Select All", "Find...", "Find Next", "Find Previous", "Delete");
+      // We need to add the ZAP message actions directly since the framework approach doesn't work well
+      // Add the message-specific actions: Attack, Open/Resend, etc.
+      // These are typically added by ZAP's ExtensionPopupMenuHandler
+      for (int i = 0; i < popup.getComponentCount(); i++) {
+        Component comp = popup.getComponent(i);
+        if (comp instanceof JMenuItem item) {
+          String name = item.getText();
+          if (!excludedNames.contains(name)) {
+            // Clone the action to avoid issues
+            JMenuItem newItem = new JMenuItem(item.getText());
+            for (ActionListener al : item.getActionListeners()) {
+              newItem.addActionListener(al);
+            }
+            newItem.setEnabled(item.isEnabled());
+            zapMenu.add(newItem);
+          }
+        } else if (comp instanceof JMenu subMenu) {
+          // Recursively handle submenus
+          JMenu newSubMenu = new JMenu(subMenu.getText());
+          for (int j = 0; j < subMenu.getComponentCount(); j++) {
+            Component subComp = subMenu.getComponent(j);
+            if (subComp instanceof JMenuItem subItem) {
+              String name = subItem.getText();
+              if (!excludedNames.contains(name)) {
+                JMenuItem newItem = new JMenuItem(subItem.getText());
+                for (ActionListener al : subItem.getActionListeners()) {
+                  newItem.addActionListener(al);
+                }
+                newItem.setEnabled(subItem.isEnabled());
+                newSubMenu.add(newItem);
+              }
+            }
+          }
+          if (newSubMenu.getComponentCount() > 0) {
+            zapMenu.add(newSubMenu);
+          }
+        }
+      }
+      if (zapMenu.getComponentCount() == 0) {
+        JMenuItem disabled = new JMenuItem("(no additional actions)");
+        disabled.setEnabled(false);
+        zapMenu.add(disabled);
+      }
     } catch (RuntimeException e) {
       LOGGER.debug("Failed to populate ZAP actions", e);
       JMenuItem disabled = new JMenuItem("(unavailable)");
