@@ -54,6 +54,10 @@ extends JPanel {
     super(new BorderLayout());
     this.textArea = textArea;
     this.model = model;
+    // No right-click menu anywhere in Pretty views: detach RSyntax's own popup (Undo/Redo,
+    // Cut/Copy/Paste, Folding) so right-click is a complete no-op. setPopupMenu(null) also
+    // marks it created, so it is never lazily rebuilt.
+    this.textArea.setPopupMenu(null);
     this.scrollPane = new RTextScrollPane(textArea);
     this.noticeBar = new PrettyNoticeBar();
     this.searchBar = new PrettySearchBar(textArea);
