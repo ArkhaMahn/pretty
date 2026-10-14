@@ -71,6 +71,13 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   }
 
   @Override
+  public void doClick() {
+    // ZAP's popup framework may call doClick() directly instead of firing action listeners.
+    // Ensure our handler runs regardless of the invocation path.
+    this.onClick(null);
+  }
+
+  @Override
   public boolean precedeWithSeparator() {
     return this.kind == Kind.CUT || this.kind == Kind.FIND || this.kind == Kind.SELECT_ALL;
   }
