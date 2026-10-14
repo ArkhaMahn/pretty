@@ -206,11 +206,9 @@ extends JPanel {
     }
     PopupMenuInvokerWrapper wrapper;
     List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
-    int registrySize = -1;
     try {
       View view = View.getSingleton();
       if (view == null || view.getPopupList() == null) {
-        LOGGER.info("PrettyView ZAP tail: no view/popup registry (diag-tail-1)");
         return;
       }
       MessageContainer<?> container = new DefaultSingleHttpMessageContainer(
@@ -218,14 +216,17 @@ extends JPanel {
           this.textArea,
           (HttpMessage) message);
       wrapper = PopupMenuUtils.getPopupMenuInvokerWrapper(container);
-      registrySize = view.getPopupList().size();
-      PrettyViewPanel.collectEnabledItems(view.getPopupList(), wrapper, enabled);
+      // Snapshot: ZAP mutates the registry Vector on other threads, so iterating it live
+      // throws ConcurrentModificationException. Vector.toArray is synchronized, making the
+      // copy atomic.
+      List<JMenuItem> registered = new ArrayList<JMenuItem>(view.getPopupList());
+      PrettyViewPanel.collectEnabledItems(registered, wrapper, enabled);
+      LOGGER.debug("PrettyView ZAP tail: registry={} enabled={}",
+          Integer.valueOf(registered.size()), Integer.valueOf(enabled.size()));
     } catch (RuntimeException e) {
       LOGGER.warn("PrettyView ZAP tail: failed to enumerate ZAP popup actions", e);
       return;
     }
-    LOGGER.info("PrettyView ZAP tail: registry={} enabled={} (diag-tail-1)",
-        Integer.valueOf(registrySize), Integer.valueOf(enabled.size()));
     if (enabled.isEmpty()) {
       return;
     }
