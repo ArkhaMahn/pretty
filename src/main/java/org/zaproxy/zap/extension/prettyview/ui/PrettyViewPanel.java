@@ -4,8 +4,12 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.HeadlessException;
 import java.awt.Toolkit;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.InputEvent;
@@ -15,11 +19,21 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.awt.event.MouseWheelListener;
+import java.io.IOException;
+import java.util.function.BooleanSupplier;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
+import javax.swing.JMenu;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSeparator;
@@ -28,8 +42,22 @@ import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
+import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rtextarea.RTextScrollPane;
+import org.parosproxy.paros.control.Control;
+import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
+import org.parosproxy.paros.network.HttpMessage;
+import org.parosproxy.paros.view.MainPopupMenu;
+import org.parosproxy.paros.view.View;
+import org.zaproxy.zap.extension.httppanel.Message;
+import org.zaproxy.zap.extension.httppanel.view.text.HttpPanelTextView;
+import org.zaproxy.zap.view.messagecontainer.MessageContainer;
+import org.zaproxy.zap.view.messagecontainer.http.DefaultSingleHttpMessageContainer;
+import org.zaproxy.zap.view.popup.PopupMenuUtils;
+import org.zaproxy.zap.view.popup.PopupMenuUtils.PopupMenuInvokerWrapper;
 
 public final class PrettyViewPanel
 extends JPanel {
@@ -47,6 +75,8 @@ extends JPanel {
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
   private DisplayLineSplitter.Split split;
   private CopyAction copyAction;
+  /** The current ZAP-action tail, rebuilt on every show and dropped on the next. */
+  private final List<Component> zapSection = new ArrayList<Component>();
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
 
@@ -54,10 +84,27 @@ extends JPanel {
     super(new BorderLayout());
     this.textArea = textArea;
     this.model = model;
-    // No right-click menu anywhere in Pretty views: detach RSyntax's own popup (Undo/Redo,
-    // Cut/Copy/Paste, Folding) so right-click is a complete no-op. setPopupMenu(null) also
-    // marks it created, so it is never lazily rebuilt.
-    this.textArea.setPopupMenu(null);
+    // RSyntax's own popup (Undo/Redo/Cut/Copy/Paste/Folding) plus ZAP's message actions
+    // appended below it: one menu holding everything, rebuilt on every show.
+    this.replacePopupTextActions(this.textArea.getPopupMenu());
+    this.textArea.getPopupMenu().addPopupMenuListener(new PopupMenuListener() {
+      @Override
+      public void popupMenuWillBecomeVisible(PopupMenuEvent event) {
+        if (!textArea.isFocusOwner()) {
+          textArea.requestFocusInWindow();
+        }
+        refreshReplacedItems();
+        rebuildZapSection();
+      }
+
+      @Override
+      public void popupMenuWillBecomeInvisible(PopupMenuEvent event) {
+      }
+
+      @Override
+      public void popupMenuCanceled(PopupMenuEvent event) {
+      }
+    });
     this.scrollPane = new RTextScrollPane(textArea);
     this.noticeBar = new PrettyNoticeBar();
     this.searchBar = new PrettySearchBar(textArea);
@@ -134,6 +181,115 @@ extends JPanel {
     int unit = Math.max(8, this.textArea.getLineHeight());
     int height = this.scrollPane.getViewport().getHeight();
     vertical.setBlockIncrement(Math.max(unit, height - unit));
+  }
+
+  /**
+   * Rebuilds the ZAP message-action tail at the end of RSyntax's own popup: the enabled entries
+   * of ZAP's popup for the current message, cloned in, so text operations and message actions
+   * share one menu. Runs on every show, so the tail always matches the message under the cursor.
+   */
+  private void rebuildZapSection() {
+    JPopupMenu menu = this.textArea.getPopupMenu();
+    if (menu == null) {
+      return;
+    }
+    for (Component doomed : this.zapSection) {
+      menu.remove(doomed);
+    }
+    this.zapSection.clear();
+    Message message = this.model.getMessage();
+    if (!(message instanceof HttpMessage)) {
+      return;
+    }
+    MainPopupMenu popup;
+    PopupMenuInvokerWrapper wrapper;
+    try {
+      View view = View.getSingleton();
+      if (view == null) {
+        return;
+      }
+      popup = view.getPopupMenu();
+      MessageContainer<?> container = new DefaultSingleHttpMessageContainer(
+          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
+          this.textArea,
+          (HttpMessage) message);
+      wrapper = PopupMenuUtils.getPopupMenuInvokerWrapper(container);
+    } catch (RuntimeException e) {
+      return;
+    }
+    List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
+    for (Component component : popup.getComponents()) {
+      if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
+        continue;
+      }
+      ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
+      boolean on;
+      try {
+        on = wrapper.isEnable(item);
+      } catch (RuntimeException e) {
+        continue;
+      }
+      if (on && !TEXT_OP_LABELS.contains(item.getText())) {
+        enabled.add(item);
+      }
+    }
+    if (enabled.isEmpty()) {
+      return;
+    }
+    enabled.sort((first, second) -> Integer.compare(second.getWeight(), first.getWeight()));
+    boolean safeMode = PrettyViewPanel.isSafeMode();
+    Map<String, JMenu> submenus = new LinkedHashMap<String, JMenu>();
+    for (ExtensionPopupMenuItem item : enabled) {
+      if (item.precedeWithSeparator()) {
+        JSeparator separator = new JSeparator();
+        menu.add(separator);
+        this.zapSection.add(separator);
+      }
+      JMenuItem clone = PrettyViewPanel.cloneItem(item, safeMode);
+      String parent = item.getParentMenuName();
+      if (parent == null || parent.isEmpty()) {
+        menu.add(clone);
+        this.zapSection.add(clone);
+      } else {
+        JMenu submenu = submenus.get(parent);
+        if (submenu == null) {
+          submenu = new JMenu(parent);
+          submenus.put(parent, submenu);
+          menu.add(submenu);
+          this.zapSection.add(submenu);
+        }
+        submenu.add(clone);
+      }
+      if (item.succeedWithSeparator()) {
+        JSeparator separator = new JSeparator();
+        menu.add(separator);
+        this.zapSection.add(separator);
+      }
+    }
+    PopupMenuUtils.removeConsecutiveSeparators(menu);
+    PopupMenuUtils.removeTopAndBottomSeparators(menu);
+  }
+
+  /** Labels RSyntax's own popup already provides; never duplicated from ZAP's popup. */
+  private static final Set<String> TEXT_OP_LABELS = Set.of(
+      "Copy", "Cut", "Paste", "Delete", "Select All",
+      "Find...", "Find Next", "Find Previous", "Undo", "Redo");
+
+  private static JMenuItem cloneItem(ExtensionPopupMenuItem item, boolean safeMode) {
+    JMenuItem clone = new JMenuItem(item.getText(), item.getIcon());
+    for (ActionListener listener : item.getActionListeners()) {
+      clone.addActionListener(listener);
+    }
+    clone.setEnabled(item.isEnabled() && (!safeMode || item.isSafe()));
+    return clone;
+  }
+
+  private static boolean isSafeMode() {
+    try {
+      return Control.getSingleton().getMode().equals(Control.Mode.safe);
+    } catch (RuntimeException e) {
+      return false;
+    }
   }
 
   /** Walks to the next find hit; the popup's Find Next entry calls this. */
@@ -292,6 +448,187 @@ extends JPanel {
       return this.split.originalRange(from, to);
     } catch (RuntimeException e) {
       return null;
+    }
+  }
+
+  /** Our replacements for RSyntax's text entries, refreshed on every show. */
+  private final List<ReplacedItem> replacedItems = new ArrayList<ReplacedItem>();
+
+  /** A menu entry acting directly on this editor. */
+  private static final class ReplacedItem {
+    final JMenuItem item;
+    final BooleanSupplier enabled;
+
+    ReplacedItem(JMenuItem item, BooleanSupplier enabled) {
+      this.item = item;
+      this.enabled = enabled;
+    }
+  }
+
+  /**
+   * RSyntax's own Cut/Copy/Paste resolve their target through focus state, which has already
+   * moved to the open menu - so menu clicks silently miss. Its entries are therefore swapped for
+   * fresh items with the same labels that act directly on this editor; order, separators and the
+   * Folding submenu are untouched. Unmatched entries (other locales) keep stock behaviour.
+   */
+  private void replacePopupTextActions(JPopupMenu menu) {
+    if (menu == null) {
+      return;
+    }
+    Component[] components = menu.getComponents();
+    List<Integer> at = new ArrayList<Integer>();
+    List<String> kinds = new ArrayList<String>();
+    for (int i = 0; i < components.length; ++i) {
+      if (!(components[i] instanceof JMenuItem) || components[i] instanceof JMenu) {
+        continue;
+      }
+      String kind = PrettyViewPanel.textActionKind(((JMenuItem) components[i]).getText());
+      if (kind != null) {
+        at.add(Integer.valueOf(i));
+        kinds.add(kind);
+      }
+    }
+    for (int s = at.size() - 1; s >= 0; --s) {
+      JMenuItem replacement = this.buildReplacement(kinds.get(s));
+      if (replacement == null) {
+        continue;
+      }
+      menu.remove(at.get(s).intValue());
+      menu.add(replacement, at.get(s).intValue());
+    }
+  }
+
+  private static String textActionKind(String text) {
+    if (text == null) {
+      return null;
+    }
+    switch (text) {
+      case "Undo":
+      case "Can't Undo":
+        return "undo";
+      case "Redo":
+      case "Can't Redo":
+        return "redo";
+      case "Cut":
+        return "cut";
+      case "Copy":
+        return "copy";
+      case "Paste":
+        return "paste";
+      case "Delete":
+        return "delete";
+      case "Select All":
+        return "selectall";
+      default:
+        return null;
+    }
+  }
+
+  private JMenuItem buildReplacement(String kind) {
+    RSyntaxTextArea area = this.textArea;
+    switch (kind) {
+      case "undo":
+        return this.register(new JMenuItem("Undo"), area::undoLastAction, area::canUndo);
+      case "redo":
+        return this.register(new JMenuItem("Redo"), area::redoLastAction, area::canRedo);
+      case "cut":
+        return this.register(new JMenuItem("Cut"), () -> PrettyViewPanel.cutSelection(area),
+            () -> area.isEditable() && PrettyViewPanel.hasSelection(area));
+      case "copy":
+        return this.register(new JMenuItem("Copy"), this::copyViaSplit,
+            () -> PrettyViewPanel.hasSelection(area));
+      case "paste":
+        return this.register(new JMenuItem("Paste"), () -> PrettyViewPanel.pasteClipboard(area),
+            area::isEditable);
+      case "delete":
+        return this.register(new JMenuItem("Delete"), () -> {
+          if (area.isEditable() && PrettyViewPanel.hasSelection(area)) {
+            area.replaceSelection("");
+          }
+        }, () -> area.isEditable() && PrettyViewPanel.hasSelection(area));
+      case "selectall":
+        return this.register(new JMenuItem("Select All"), area::selectAll, () -> true);
+      default:
+        return null;
+    }
+  }
+
+  private JMenuItem register(JMenuItem item, Runnable action, BooleanSupplier enabled) {
+    item.addActionListener(e -> action.run());
+    this.replacedItems.add(new ReplacedItem(item, enabled));
+    return item;
+  }
+
+  private void refreshReplacedItems() {
+    for (ReplacedItem replaced : this.replacedItems) {
+      try {
+        replaced.item.setEnabled(replaced.enabled.getAsBoolean());
+      } catch (RuntimeException e) {
+        replaced.item.setEnabled(true);
+      }
+    }
+  }
+
+  private static boolean hasSelection(JTextComponent area) {
+    return area.getSelectionStart() != area.getSelectionEnd();
+  }
+
+  /** Menu Copy: split-aware once a payload is shown, literal before the first load. */
+  private void copyViaSplit() {
+    if (this.copyAction != null) {
+      this.copyAction.actionPerformed(
+          new ActionEvent(this.textArea, ActionEvent.ACTION_PERFORMED, "copy"));
+    } else {
+      PrettyViewPanel.copyLiteral(this.textArea);
+    }
+  }
+
+  /** Copies the selection to the clipboard; a no-op without a selection. */
+  private static void copyLiteral(JTextComponent area) {
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available.
+    }
+  }
+
+  /** Cuts the selection to the clipboard; a no-op without an editable selection. */
+  private static void cutSelection(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+      area.replaceSelection("");
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available; the text is left untouched.
+    }
+  }
+
+  /** Pastes the clipboard string at the caret; a no-op when read-only or stringless. */
+  private static void pasteClipboard(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    try {
+      Transferable contents =
+          Toolkit.getDefaultToolkit().getSystemClipboard().getContents(area);
+      if (contents != null && contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+        String text = (String) contents.getTransferData(DataFlavor.stringFlavor);
+        area.replaceSelection(text == null ? "" : text);
+      }
+    } catch (HeadlessException | IllegalStateException | SecurityException | UnsupportedFlavorException | IOException e) {
+      // No pasteable string available; the text is left untouched.
     }
   }
 
