@@ -47,6 +47,8 @@ import javax.swing.event.PopupMenuListener;
 import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rtextarea.RTextScrollPane;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.parosproxy.paros.control.Control;
 import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
 import org.parosproxy.paros.network.HttpMessage;
@@ -61,6 +63,7 @@ import org.zaproxy.zap.view.popup.PopupMenuUtils.PopupMenuInvokerWrapper;
 
 public final class PrettyViewPanel
 extends JPanel {
+  private static final Logger LOGGER = LogManager.getLogger(PrettyViewPanel.class);
   private static final long serialVersionUID = 1L;
   private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
@@ -203,9 +206,11 @@ extends JPanel {
     }
     PopupMenuInvokerWrapper wrapper;
     List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
+    int registrySize = -1;
     try {
       View view = View.getSingleton();
       if (view == null || view.getPopupList() == null) {
+        LOGGER.info("PrettyView ZAP tail: no view/popup registry (diag-tail-1)");
         return;
       }
       MessageContainer<?> container = new DefaultSingleHttpMessageContainer(
@@ -213,10 +218,14 @@ extends JPanel {
           this.textArea,
           (HttpMessage) message);
       wrapper = PopupMenuUtils.getPopupMenuInvokerWrapper(container);
+      registrySize = view.getPopupList().size();
       PrettyViewPanel.collectEnabledItems(view.getPopupList(), wrapper, enabled);
     } catch (RuntimeException e) {
+      LOGGER.warn("PrettyView ZAP tail: failed to enumerate ZAP popup actions", e);
       return;
     }
+    LOGGER.info("PrettyView ZAP tail: registry={} enabled={} (diag-tail-1)",
+        Integer.valueOf(registrySize), Integer.valueOf(enabled.size()));
     if (enabled.isEmpty()) {
       return;
     }
