@@ -23,6 +23,7 @@ import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -33,12 +34,24 @@ import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import javax.swing.event.MenuEvent;
+import javax.swing.event.MenuListener;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.parosproxy.paros.network.HttpMessage;
+import org.parosproxy.paros.view.View;
+import org.zaproxy.zap.extension.httppanel.Message;
+import org.zaproxy.zap.extension.httppanel.view.text.HttpPanelTextView;
+import org.parosproxy.paros.view.MainPopupMenu;
+import org.parosproxy.paros.view.View;
+import org.zaproxy.zap.view.messagecontainer.http.DefaultSingleHttpMessageContainer;
 import org.fife.ui.rtextarea.RTextScrollPane;
 
 public final class PrettyViewPanel
 extends JPanel {
+  private static final Logger LOGGER = LogManager.getLogger(PrettyViewPanel.class);
   private static final long serialVersionUID = 1L;
   private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
@@ -57,10 +70,13 @@ extends JPanel {
   private BiConsumer<Integer, Integer> messageActionsShower;
   /** Whether a message backing the editor is currently available for message actions. */
   private BooleanSupplier messageActionsAvailable;
+  /** The model providing message data for ZAP actions. */
+  private final PrettyViewModel model;
 
-  public PrettyViewPanel(RSyntaxTextArea textArea) {
+  public PrettyViewPanel(RSyntaxTextArea textArea, PrettyViewModel model) {
     super(new BorderLayout());
     this.textArea = textArea;
+    this.model = model;
     this.scrollPane = new RTextScrollPane(textArea);
     this.noticeBar = new PrettyNoticeBar();
     this.searchBar = new PrettySearchBar(textArea);
@@ -149,6 +165,18 @@ extends JPanel {
    */
   private void installPopupMenu() {
     this.textArea.setComponentPopupMenu(this.createComponentPopupMenu());
+    // Also install mouse listener for the focus-then-popup behavior (core parity)
+    this.textArea.addMouseListener(new MouseAdapter() {
+      @Override
+      public void mousePressed(MouseEvent event) {
+        PrettyViewPanel.this.showCorePopup(event);
+      }
+
+      @Override
+      public void mouseReleased(MouseEvent event) {
+        PrettyViewPanel.this.showCorePopup(event);
+      }
+    });
   }
 
   private JPopupMenu createComponentPopupMenu() {
@@ -193,20 +221,85 @@ extends JPanel {
 
     menu.addSeparator();
 
-    // ZAP's message actions (Attack, etc.) - shown when available
-    menu.add(new JSeparator());
-    JMenuItem zapActionsItem = new JMenuItem("ZAP Actions...");
-    zapActionsItem.addActionListener(e -> {
-      if (this.messageActionsShower != null
-          && (this.messageActionsAvailable == null || this.messageActionsAvailable.getAsBoolean())) {
-        // Get click point from last mouse event - we don't have it here, so use center
-        Point p = this.textArea.getLocationOnScreen();
-        this.messageActionsShower.accept(p.x + 10, p.y + 10);
+    // ZAP's message actions (Attack, Open/Resend, etc.) - dynamically populated
+    JMenu zapMenu = new JMenu("ZAP Actions");
+    zapMenu.addMenuListener(new MenuListener() {
+      @Override
+      public void menuSelected(MenuEvent e) {
+        populateZapActions(zapMenu);
       }
+
+      @Override
+      public void menuDeselected(MenuEvent e) {}
+
+      @Override
+      public void menuCanceled(MenuEvent e) {}
     });
-    menu.add(zapActionsItem);
+    menu.add(zapMenu);
 
     return menu;
+  }
+
+  private void populateZapActions(JMenu zapMenu) {
+    zapMenu.removeAll();
+    Message message = this.model.getMessage();
+    if (!(message instanceof HttpMessage) || this.messageActionsShower == null) {
+      JMenuItem disabled = new JMenuItem("(no message available)");
+      disabled.setEnabled(false);
+      zapMenu.add(disabled);
+      return;
+    }
+    HttpMessage httpMessage = (HttpMessage) message;
+    try {
+      DefaultSingleHttpMessageContainer container = new DefaultSingleHttpMessageContainer(
+          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
+          this.textArea,
+          httpMessage);
+      View view = View.getSingleton();
+      if (view == null) {
+        JMenuItem disabled = new JMenuItem("(ZAP view not ready)");
+        disabled.setEnabled(false);
+        zapMenu.add(disabled);
+        return;
+      }
+      MainPopupMenu popup = view.getPopupMenu();
+      // Ask the popup menu to populate our menu with its items
+      popup.show(container, 0, 0); // This will add items to our menu via the framework
+    } catch (RuntimeException e) {
+      LOGGER.debug("Failed to populate ZAP actions", e);
+      JMenuItem disabled = new JMenuItem("(unavailable)");
+      disabled.setEnabled(false);
+      zapMenu.add(disabled);
+    }
+  }
+
+  private void showCorePopup(MouseEvent event) {
+    if (!event.isPopupTrigger()) {
+      return;
+    }
+    // Core parity: hand focus back to the editor before the menu shows
+    if (!this.textArea.isFocusOwner()) {
+      this.textArea.requestFocusInWindow();
+    }
+    if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
+      int position = this.textArea.viewToModel2D(event.getPoint());
+      if (position >= 0) {
+        this.textArea.setCaretPosition(position);
+      }
+    }
+    // Show the core message popup (Attack, Open/Resend, etc.)
+    Message message = this.model.getMessage();
+    if (message instanceof HttpMessage) {
+      HttpMessage httpMessage = (HttpMessage) message;
+      DefaultSingleHttpMessageContainer container = new DefaultSingleHttpMessageContainer(
+          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
+          this.textArea,
+          httpMessage);
+      View view = View.getSingleton();
+      if (view != null) {
+        view.getPopupMenu().show(container, event.getX(), event.getY());
+      }
+    }
   }
 
   private void showPopup(MouseEvent event) {

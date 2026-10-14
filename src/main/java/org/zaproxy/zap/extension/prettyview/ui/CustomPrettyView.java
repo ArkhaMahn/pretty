@@ -92,7 +92,7 @@ SearchableHttpPanelView {
     this.worker = new PrettyWorker();
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
     this.textArea = this.createTextArea();
-    this.panel = new PrettyViewPanel(this.textArea);
+    this.panel = new PrettyViewPanel(this.textArea, this.model);
     this.panel.setMessageActions(this::hasHttpMessage, this::showCoreMessageMenu);
     this.model.addHttpPanelViewModelListener(this);
   }
