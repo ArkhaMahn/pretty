@@ -13,7 +13,6 @@ import org.zaproxy.zap.extension.httppanel.MessageViewSelectedEvent;
 import org.zaproxy.zap.extension.httppanel.component.split.request.RequestSplitComponent;
 import org.zaproxy.zap.extension.httppanel.component.split.response.ResponseSplitComponent;
 import org.zaproxy.zap.extension.prettyview.formatters.PrettifyThreshold;
-import org.zaproxy.zap.extension.prettyview.ui.PrettyTextPopupItem;
 import org.zaproxy.zap.extension.prettyview.ui.PrettyViewFactory;
 import org.zaproxy.zap.extension.prettyview.view.PrettyDefaultViewSelectorFactory;
 import org.zaproxy.zap.extension.prettyview.view.ViewChoiceMemory;
@@ -75,13 +74,6 @@ extends ExtensionAdaptor {
     // large body view takes over, and a stood-down choice is honoured here as well.
     manager.addRequestDefaultViewSelectorFactory("RequestSplit", new PrettyDefaultViewSelectorFactory(REQUEST_SELECTOR_NAME, REQUEST_VIEW_NAME, true, maxPrettifyChars, this.choices, RequestSplitComponent.ViewComponent.BODY));
     manager.addResponseDefaultViewSelectorFactory("ResponseSplit", new PrettyDefaultViewSelectorFactory(RESPONSE_SELECTOR_NAME, RESPONSE_VIEW_NAME, false, maxPrettifyChars, this.choices, RequestSplitComponent.ViewComponent.BODY));
-    // Text actions heading the message popup. Each entry shows only while the click landed in a
-    // Pretty editor, so no other popup in ZAP gains anything. They are deliberately not removed
-    // on unload: with no Pretty panel left anywhere the enable checks never match, the entries
-    // stay hidden, and nothing here holds a view (the click target is captured fresh per show).
-    for (PrettyTextPopupItem.Kind kind : PrettyTextPopupItem.Kind.values()) {
-      extensionHook.getHookMenu().addPopupMenuItem(new PrettyTextPopupItem(kind));
-    }
   }
 
   /**

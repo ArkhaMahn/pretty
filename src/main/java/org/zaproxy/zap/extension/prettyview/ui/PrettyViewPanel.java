@@ -5,7 +5,10 @@ import java.awt.Component;
 import java.awt.HeadlessException;
 import java.awt.Point;
 import java.awt.Toolkit;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
@@ -17,14 +20,13 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.awt.event.MouseWheelListener;
-import java.util.Set;
+import java.io.IOException;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
-import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -35,24 +37,16 @@ import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
-import javax.swing.event.MenuEvent;
-import javax.swing.event.MenuListener;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.JTextComponent;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.parosproxy.paros.network.HttpMessage;
-import org.parosproxy.paros.view.View;
-import org.zaproxy.zap.extension.httppanel.Message;
-import org.zaproxy.zap.extension.httppanel.view.text.HttpPanelTextView;
-import org.parosproxy.paros.view.MainPopupMenu;
-import org.parosproxy.paros.view.View;
-import org.zaproxy.zap.view.messagecontainer.http.DefaultSingleHttpMessageContainer;
 import org.fife.ui.rtextarea.RTextScrollPane;
 
 public final class PrettyViewPanel
 extends JPanel {
-  private static final Logger LOGGER = LogManager.getLogger(PrettyViewPanel.class);
   private static final long serialVersionUID = 1L;
   private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
@@ -71,6 +65,8 @@ extends JPanel {
   private BiConsumer<Integer, Integer> messageActionsShower;
   /** Whether a message backing the editor is currently available for message actions. */
   private BooleanSupplier messageActionsAvailable;
+  /** Last right-click point, relative to the text area, for the ZAP actions entry. */
+  private Point lastPopupPoint;
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
 
@@ -158,48 +154,62 @@ extends JPanel {
   }
 
   /**
-   * Shows ZAP's own message popup on right-click, exactly as the core request and response panels
-   * do: the same menu over the same kind of message container, so the Pretty tabs offer precisely
-   * the options the Text view offers - nothing added, nothing missing. Like core, focus is handed
-   * back to the editor first, so focus-sensitive text operations resolve against it rather than
-   * the menu.
+   * The single right-click menu: working text operations plus ZAP's own message actions behind
+   * one entry. Everything here acts directly on this editor, so clicks cannot miss.
    */
   private void installPopupMenu() {
     this.textArea.setComponentPopupMenu(this.createComponentPopupMenu());
-    // Also install mouse listener for the focus-then-popup behavior (core parity)
+    // Caret follows a right-click with no selection (standard text behaviour); the menu itself
+    // is shown by Swing, so this listener never shows anything and no second menu can appear.
     this.textArea.addMouseListener(new MouseAdapter() {
       @Override
       public void mousePressed(MouseEvent event) {
-        PrettyViewPanel.this.showCorePopup(event);
+        PrettyViewPanel.this.trackPopupClick(event);
       }
 
       @Override
       public void mouseReleased(MouseEvent event) {
-        PrettyViewPanel.this.showCorePopup(event);
+        PrettyViewPanel.this.trackPopupClick(event);
       }
     });
+  }
+
+  private void trackPopupClick(MouseEvent event) {
+    if (!SwingUtilities.isRightMouseButton(event)) {
+      return;
+    }
+    this.lastPopupPoint = new Point(event.getPoint());
+    if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
+      int position = this.textArea.viewToModel2D(event.getPoint());
+      if (position >= 0) {
+        this.textArea.setCaretPosition(position);
+      }
+    }
   }
 
   private JPopupMenu createComponentPopupMenu() {
     JPopupMenu menu = new JPopupMenu();
     RSyntaxTextArea area = this.textArea;
 
-    // Standard text operations with direct action listeners - no focus-dependent actions
     JMenuItem copyItem = new JMenuItem("Copy");
-    copyItem.addActionListener(e -> PrettyTextPopupItem.copySelection(area));
+    copyItem.addActionListener(e -> this.copyThroughSplit());
     menu.add(copyItem);
 
     JMenuItem cutItem = new JMenuItem("Cut");
-    cutItem.addActionListener(e -> {
-      if (area.isEditable()) {
-        PrettyTextPopupItem.cutSelection(area);
-      }
-    });
+    cutItem.addActionListener(e -> PrettyViewPanel.cutSelection(area));
     menu.add(cutItem);
 
     JMenuItem pasteItem = new JMenuItem("Paste");
-    pasteItem.addActionListener(e -> PrettyTextPopupItem.pasteClipboard(area));
+    pasteItem.addActionListener(e -> PrettyViewPanel.pasteClipboard(area));
     menu.add(pasteItem);
+
+    JMenuItem deleteItem = new JMenuItem("Delete");
+    deleteItem.addActionListener(e -> {
+      if (area.isEditable() && area.getSelectionStart() != area.getSelectionEnd()) {
+        area.replaceSelection("");
+      }
+    });
+    menu.add(deleteItem);
 
     menu.addSeparator();
 
@@ -207,7 +217,6 @@ extends JPanel {
     selectAllItem.addActionListener(e -> area.selectAll());
     menu.add(selectAllItem);
 
-    // Find operations
     JMenuItem findItem = new JMenuItem("Find...");
     findItem.addActionListener(e -> this.openSearch());
     menu.add(findItem);
@@ -222,157 +231,110 @@ extends JPanel {
 
     menu.addSeparator();
 
-    // ZAP's message actions (Attack, Open/Resend, etc.) - dynamically populated
-    JMenu zapMenu = new JMenu("ZAP Actions");
-    zapMenu.addMenuListener(new MenuListener() {
+    JMenuItem zapItem = new JMenuItem("ZAP actions...");
+    zapItem.addActionListener(e -> this.showZapActions());
+    menu.add(zapItem);
+
+    menu.addPopupMenuListener(new PopupMenuListener() {
       @Override
-      public void menuSelected(MenuEvent e) {
-        populateZapActions(zapMenu);
+      public void popupMenuWillBecomeVisible(PopupMenuEvent event) {
+        // Core parity: hand focus back to the editor before the menu shows.
+        if (!area.isFocusOwner()) {
+          area.requestFocusInWindow();
+        }
+        boolean hasSelection = area.getSelectionStart() != area.getSelectionEnd();
+        copyItem.setEnabled(hasSelection);
+        cutItem.setEnabled(area.isEditable() && hasSelection);
+        pasteItem.setEnabled(area.isEditable());
+        deleteItem.setEnabled(area.isEditable() && hasSelection);
       }
 
       @Override
-      public void menuDeselected(MenuEvent e) {}
+      public void popupMenuWillBecomeInvisible(PopupMenuEvent event) {
+      }
 
       @Override
-      public void menuCanceled(MenuEvent e) {}
+      public void popupMenuCanceled(PopupMenuEvent event) {
+      }
     });
-    menu.add(zapMenu);
-
     return menu;
   }
 
-  private void populateZapActions(JMenu zapMenu) {
-    zapMenu.removeAll();
-    Message message = this.model.getMessage();
-    if (!(message instanceof HttpMessage) || this.messageActionsShower == null) {
-      JMenuItem disabled = new JMenuItem("(no message available)");
-      disabled.setEnabled(false);
-      zapMenu.add(disabled);
-      return;
-    }
-    HttpMessage httpMessage = (HttpMessage) message;
-    try {
-      DefaultSingleHttpMessageContainer container = new DefaultSingleHttpMessageContainer(
-          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
-          this.textArea,
-          httpMessage);
-      View view = View.getSingleton();
-      if (view == null) {
-        JMenuItem disabled = new JMenuItem("(ZAP view not ready)");
-        disabled.setEnabled(false);
-        zapMenu.add(disabled);
-        return;
-      }
-      MainPopupMenu popup = view.getPopupMenu();
-      // Create a temporary menu to capture the ZAP items, then filter out duplicates
-      JMenu tempMenu = new JMenu();
-      popup.show(new DefaultSingleHttpMessageContainer(
-          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME, this.textArea, httpMessage), 0, 0);
-      // The show() method populates the tempMenu via the framework - but we need a different approach
-      // Instead, manually add the ZAP message actions that aren't our text operations
-      Set<String> excludedNames = Set.of(
-          "Copy", "Cut", "Paste", "Select All", "Find...", "Find Next", "Find Previous", "Delete");
-      // We need to add the ZAP message actions directly since the framework approach doesn't work well
-      // Add the message-specific actions: Attack, Open/Resend, etc.
-      // These are typically added by ZAP's ExtensionPopupMenuHandler
-      for (int i = 0; i < popup.getComponentCount(); i++) {
-        Component comp = popup.getComponent(i);
-        if (comp instanceof JMenuItem item) {
-          String name = item.getText();
-          if (!excludedNames.contains(name)) {
-            // Clone the action to avoid issues
-            JMenuItem newItem = new JMenuItem(item.getText());
-            for (ActionListener al : item.getActionListeners()) {
-              newItem.addActionListener(al);
-            }
-            newItem.setEnabled(item.isEnabled());
-            zapMenu.add(newItem);
-          }
-        } else if (comp instanceof JMenu subMenu) {
-          // Recursively handle submenus
-          JMenu newSubMenu = new JMenu(subMenu.getText());
-          for (int j = 0; j < subMenu.getComponentCount(); j++) {
-            Component subComp = subMenu.getComponent(j);
-            if (subComp instanceof JMenuItem subItem) {
-              String name = subItem.getText();
-              if (!excludedNames.contains(name)) {
-                JMenuItem newItem = new JMenuItem(subItem.getText());
-                for (ActionListener al : subItem.getActionListeners()) {
-                  newItem.addActionListener(al);
-                }
-                newItem.setEnabled(subItem.isEnabled());
-                newSubMenu.add(newItem);
-              }
-            }
-          }
-          if (newSubMenu.getComponentCount() > 0) {
-            zapMenu.add(newSubMenu);
-          }
-        }
-      }
-      if (zapMenu.getComponentCount() == 0) {
-        JMenuItem disabled = new JMenuItem("(no additional actions)");
-        disabled.setEnabled(false);
-        zapMenu.add(disabled);
-      }
-    } catch (RuntimeException e) {
-      LOGGER.debug("Failed to populate ZAP actions", e);
-      JMenuItem disabled = new JMenuItem("(unavailable)");
-      disabled.setEnabled(false);
-      zapMenu.add(disabled);
+  /** Copies through the split mapping so the clipboard holds the message's own characters. */
+  private void copyThroughSplit() {
+    if (this.copyAction != null) {
+      this.copyAction.actionPerformed(
+          new ActionEvent(this.textArea, ActionEvent.ACTION_PERFORMED, "copy"));
+    } else {
+      PrettyViewPanel.copyLiteral(this.textArea);
     }
   }
 
-  private void showCorePopup(MouseEvent event) {
-    if (!event.isPopupTrigger()) {
-      return;
-    }
-    // Core parity: hand focus back to the editor before the menu shows
-    if (!this.textArea.isFocusOwner()) {
-      this.textArea.requestFocusInWindow();
-    }
-    if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
-      int position = this.textArea.viewToModel2D(event.getPoint());
-      if (position >= 0) {
-        this.textArea.setCaretPosition(position);
-      }
-    }
-    // Show the core message popup (Attack, Open/Resend, etc.)
-    Message message = this.model.getMessage();
-    if (message instanceof HttpMessage) {
-      HttpMessage httpMessage = (HttpMessage) message;
-      DefaultSingleHttpMessageContainer container = new DefaultSingleHttpMessageContainer(
-          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
-          this.textArea,
-          httpMessage);
-      View view = View.getSingleton();
-      if (view != null) {
-        view.getPopupMenu().show(container, event.getX(), event.getY());
-      }
-    }
-  }
-
-  private void showPopup(MouseEvent event) {
-    if (!event.isPopupTrigger()) {
-      return;
-    }
-    // Core parity (HttpPanelTextView$CustomPopupMenu): hand focus back to the editor before the
-    // menu shows, so text operations fired from it resolve against this area.
-    if (!this.textArea.isFocusOwner()) {
-      this.textArea.requestFocusInWindow();
-    }
-    if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
-      int position = this.textArea.viewToModel2D(event.getPoint());
-      if (position >= 0) {
-        this.textArea.setCaretPosition(position);
-      }
-    }
-    BiConsumer<Integer, Integer> shower = this.messageActionsShower;
-    if (shower == null
+  /** Shows ZAP's own message popup (Attack, Open/Resend, ...) at the right-click point. */
+  private void showZapActions() {
+    if (this.messageActionsShower == null
         || (this.messageActionsAvailable != null && !this.messageActionsAvailable.getAsBoolean())) {
       return;
     }
-    shower.accept(event.getX(), event.getY());
+    Point at = this.lastPopupPoint;
+    if (at == null) {
+      try {
+        java.awt.geom.Rectangle2D caret = this.textArea.modelToView2D(this.textArea.getCaretPosition());
+        at = caret == null ? new Point(5, 5) : new Point((int) caret.getX(), (int) caret.getY());
+      } catch (BadLocationException e) {
+        at = new Point(5, 5);
+      }
+    }
+    this.messageActionsShower.accept(at.x, at.y);
+  }
+
+  /** Copies the selection to the clipboard; a no-op without a selection. */
+  private static void copyLiteral(JTextComponent area) {
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available.
+    }
+  }
+
+  /** Cuts the selection to the clipboard; a no-op without an editable selection. */
+  private static void cutSelection(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+      area.replaceSelection("");
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available; the text is left untouched.
+    }
+  }
+
+  /** Pastes the clipboard string at the caret; a no-op when read-only or stringless. */
+  private static void pasteClipboard(JTextComponent area) {
+    if (!area.isEditable()) {
+      return;
+    }
+    try {
+      Transferable contents =
+          Toolkit.getDefaultToolkit().getSystemClipboard().getContents(area);
+      if (contents != null && contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+        String text = (String) contents.getTransferData(DataFlavor.stringFlavor);
+        area.replaceSelection(text == null ? "" : text);
+      }
+    } catch (HeadlessException | IllegalStateException | SecurityException | UnsupportedFlavorException | IOException e) {
+      // No pasteable string available; the text is left untouched.
+    }
   }
 
   /**
