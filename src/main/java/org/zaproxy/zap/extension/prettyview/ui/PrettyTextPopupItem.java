@@ -221,8 +221,22 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
     }
   }
 
+  /** Copies the selection to the clipboard; a no-op without a selection. */
+  public static void copySelection(JTextComponent area) {
+    String selected = area.getSelectedText();
+    if (selected == null || selected.isEmpty()) {
+      return;
+    }
+    try {
+      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+          new StringSelection(selected), null);
+    } catch (HeadlessException | IllegalStateException | SecurityException e) {
+      // No clipboard available.
+    }
+  }
+
   /** Cuts the selection to the clipboard; a no-op without an editable selection. */
-  private static void cutSelection(JTextComponent area) {
+  public static void cutSelection(JTextComponent area) {
     if (!area.isEditable()) {
       return;
     }
@@ -240,7 +254,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   }
 
   /** Pastes the clipboard string at the caret; a no-op when read-only or stringless. */
-  private static void pasteClipboard(JTextComponent area) {
+  public static void pasteClipboard(JTextComponent area) {
     if (!area.isEditable()) {
       return;
     }

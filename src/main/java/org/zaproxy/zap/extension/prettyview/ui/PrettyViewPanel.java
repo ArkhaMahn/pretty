@@ -3,26 +3,32 @@ package org.zaproxy.zap.extension.prettyview.ui;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.HeadlessException;
+import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.event.InputEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.awt.event.MouseWheelListener;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSeparator;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
@@ -142,17 +148,65 @@ extends JPanel {
    * the menu.
    */
   private void installPopupMenu() {
-    this.textArea.addMouseListener(new MouseAdapter() {
-      @Override
-      public void mousePressed(MouseEvent event) {
-        PrettyViewPanel.this.showPopup(event);
-      }
+    this.textArea.setComponentPopupMenu(this.createComponentPopupMenu());
+  }
 
-      @Override
-      public void mouseReleased(MouseEvent event) {
-        PrettyViewPanel.this.showPopup(event);
+  private JPopupMenu createComponentPopupMenu() {
+    JPopupMenu menu = new JPopupMenu();
+    RSyntaxTextArea area = this.textArea;
+
+    // Standard text operations with direct action listeners - no focus-dependent actions
+    JMenuItem copyItem = new JMenuItem("Copy");
+    copyItem.addActionListener(e -> PrettyTextPopupItem.copySelection(area));
+    menu.add(copyItem);
+
+    JMenuItem cutItem = new JMenuItem("Cut");
+    cutItem.addActionListener(e -> {
+      if (area.isEditable()) {
+        PrettyTextPopupItem.cutSelection(area);
       }
     });
+    menu.add(cutItem);
+
+    JMenuItem pasteItem = new JMenuItem("Paste");
+    pasteItem.addActionListener(e -> PrettyTextPopupItem.pasteClipboard(area));
+    menu.add(pasteItem);
+
+    menu.addSeparator();
+
+    JMenuItem selectAllItem = new JMenuItem("Select All");
+    selectAllItem.addActionListener(e -> area.selectAll());
+    menu.add(selectAllItem);
+
+    // Find operations
+    JMenuItem findItem = new JMenuItem("Find...");
+    findItem.addActionListener(e -> this.openSearch());
+    menu.add(findItem);
+
+    JMenuItem findNextItem = new JMenuItem("Find Next");
+    findNextItem.addActionListener(e -> this.findNext());
+    menu.add(findNextItem);
+
+    JMenuItem findPrevItem = new JMenuItem("Find Previous");
+    findPrevItem.addActionListener(e -> this.findPrevious());
+    menu.add(findPrevItem);
+
+    menu.addSeparator();
+
+    // ZAP's message actions (Attack, etc.) - shown when available
+    menu.add(new JSeparator());
+    JMenuItem zapActionsItem = new JMenuItem("ZAP Actions...");
+    zapActionsItem.addActionListener(e -> {
+      if (this.messageActionsShower != null
+          && (this.messageActionsAvailable == null || this.messageActionsAvailable.getAsBoolean())) {
+        // Get click point from last mouse event - we don't have it here, so use center
+        Point p = this.textArea.getLocationOnScreen();
+        this.messageActionsShower.accept(p.x + 10, p.y + 10);
+      }
+    });
+    menu.add(zapActionsItem);
+
+    return menu;
   }
 
   private void showPopup(MouseEvent event) {
