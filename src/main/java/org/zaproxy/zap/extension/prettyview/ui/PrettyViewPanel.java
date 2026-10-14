@@ -205,7 +205,9 @@ extends JPanel {
       return;
     }
     PopupMenuInvokerWrapper wrapper;
-    List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
+    List<ExtensionPopupMenuItem> top = new ArrayList<ExtensionPopupMenuItem>();
+    Map<String, ZapGroup> groups = new LinkedHashMap<String, ZapGroup>();
+    List<ExtensionPopupMenuItem> seen = new ArrayList<ExtensionPopupMenuItem>();
     try {
       View view = View.getSingleton();
       if (view == null || view.getPopupList() == null) {
@@ -220,85 +222,174 @@ extends JPanel {
       // throws ConcurrentModificationException. Vector.toArray is synchronized, making the
       // copy atomic.
       List<JMenuItem> registered = new ArrayList<JMenuItem>(view.getPopupList());
-      PrettyViewPanel.collectEnabledItems(registered, wrapper, enabled);
-      LOGGER.debug("PrettyView ZAP tail: registry={} enabled={}",
-          Integer.valueOf(registered.size()), Integer.valueOf(enabled.size()));
+      PrettyViewPanel.collectZapEntries(registered, wrapper, top, groups, seen);
+      LOGGER.debug("PrettyView ZAP tail: registry={} top={} groups={}",
+          Integer.valueOf(registered.size()), Integer.valueOf(top.size()),
+          Integer.valueOf(groups.size()));
     } catch (RuntimeException e) {
       LOGGER.warn("PrettyView ZAP tail: failed to enumerate ZAP popup actions", e);
       return;
     }
-    if (enabled.isEmpty()) {
+    if (top.isEmpty() && groups.isEmpty()) {
       return;
     }
-    enabled.sort((first, second) -> Integer.compare(second.getWeight(), first.getWeight()));
     boolean safeMode = PrettyViewPanel.isSafeMode();
-    Map<String, JMenu> submenus = new LinkedHashMap<String, JMenu>();
-    for (ExtensionPopupMenuItem item : enabled) {
-      if (item.precedeWithSeparator()) {
-        JSeparator separator = new JSeparator();
-        menu.add(separator);
-        this.zapSection.add(separator);
-      }
-      JMenuItem clone = PrettyViewPanel.cloneItem(item, safeMode);
-      String parent = item.getParentMenuName();
-      if (parent == null || parent.isEmpty()) {
-        menu.add(clone);
-        this.zapSection.add(clone);
+    // Merge top-level entries and submenu groups by weight, heaviest first, mirroring how ZAP
+    // orders its own menu. Groups sort by their heaviest member.
+    List<ZapSegment> segments = new ArrayList<ZapSegment>();
+    for (ExtensionPopupMenuItem item : top) {
+      segments.add(new ZapSegment(item.getWeight(), item, null));
+    }
+    for (ZapGroup group : groups.values()) {
+      group.members.sort((first, second) -> Integer.compare(second.getWeight(), first.getWeight()));
+      segments.add(new ZapSegment(group.weight(), null, group));
+    }
+    segments.sort((first, second) -> Integer.compare(second.weight, first.weight));
+    for (ZapSegment segment : segments) {
+      if (segment.group == null) {
+        PrettyViewPanel.emitZapItem(menu, segment.item, safeMode, this.zapSection);
       } else {
-        JMenu submenu = submenus.get(parent);
-        if (submenu == null) {
-          submenu = new JMenu(parent);
-          submenus.put(parent, submenu);
-          menu.add(submenu);
-          this.zapSection.add(submenu);
+        JMenu submenu = new JMenu(segment.group.title);
+        for (ExtensionPopupMenuItem member : segment.group.members) {
+          PrettyViewPanel.emitZapItem(submenu, member, safeMode, null);
         }
-        submenu.add(clone);
-      }
-      if (item.succeedWithSeparator()) {
-        JSeparator separator = new JSeparator();
-        menu.add(separator);
-        this.zapSection.add(separator);
+        PopupMenuUtils.removeConsecutiveSeparators(submenu);
+        menu.add(submenu);
+        this.zapSection.add(submenu);
       }
     }
     PopupMenuUtils.removeConsecutiveSeparators(menu);
     PopupMenuUtils.removeTopAndBottomSeparators(menu);
   }
 
+  /** One row of the tail: either a top-level entry or a whole submenu. */
+  private static final class ZapSegment {
+    final int weight;
+    final ExtensionPopupMenuItem item;
+    final ZapGroup group;
+
+    ZapSegment(int weight, ExtensionPopupMenuItem item, ZapGroup group) {
+      this.weight = weight;
+      this.item = item;
+      this.group = group;
+    }
+  }
+
+  /** A submenu kept exactly as its addon built it: title plus member entries in order. */
+  private static final class ZapGroup {
+    final String title;
+    final List<ExtensionPopupMenuItem> members = new ArrayList<ExtensionPopupMenuItem>();
+
+    ZapGroup(String title) {
+      this.title = title;
+    }
+
+    int weight() {
+      int weight = Integer.MIN_VALUE;
+      for (ExtensionPopupMenuItem member : this.members) {
+        weight = Math.max(weight, member.getWeight());
+      }
+      return weight;
+    }
+  }
+
+  private static void emitZapItem(
+      JComponent parent, ExtensionPopupMenuItem item, boolean safeMode, List<Component> tracked) {
+    if (item.precedeWithSeparator()) {
+      JSeparator separator = new JSeparator();
+      parent.add(separator);
+      if (tracked != null) {
+        tracked.add(separator);
+      }
+    }
+    JMenuItem clone = PrettyViewPanel.cloneItem(item, safeMode);
+    parent.add(clone);
+    if (tracked != null) {
+      tracked.add(clone);
+    }
+    if (item.succeedWithSeparator()) {
+      JSeparator separator = new JSeparator();
+      parent.add(separator);
+      if (tracked != null) {
+        tracked.add(separator);
+      }
+    }
+  }
+
   /**
-   * Collects the enabled message actions from ZAP's registered popup items, recursing into
-   * submenu roots. Reads the stable registration list (not the live menu's children, which only
-   * exist while a menu is showing), so the tail is complete on every show.
+   * Collects the enabled message actions from ZAP's registered popup items, preserving each
+   * addon's built submenu structure: entries already grouped under a submenu root stay under a
+   * submenu of that title, instead of being flattened and regrouped. Reads the stable
+   * registration list (not the live menu's children, which only exist while a menu is showing),
+   * so the tail is complete on every show. Identity-deduplicated: an entry registered both
+   * standalone and inside a submenu appears once.
    */
-  private static void collectEnabledItems(
+  private static void collectZapEntries(
       List<? extends Component> components,
       PopupMenuInvokerWrapper wrapper,
-      List<ExtensionPopupMenuItem> enabled) {
+      List<ExtensionPopupMenuItem> top,
+      Map<String, ZapGroup> groups,
+      List<ExtensionPopupMenuItem> seen) {
     for (Component component : components) {
       if (component instanceof JMenu && !(component instanceof ExtensionPopupMenuItem)) {
         // Submenu roots keep their children in their popup, not in themselves.
-        collectEnabledItems(
-            java.util.Arrays.asList(((JMenu) component).getPopupMenu().getComponents()),
-            wrapper,
-            enabled);
+        JMenu root = (JMenu) component;
+        String title = root.getText();
+        if (title == null || title.isEmpty()) {
+          continue;
+        }
+        for (Component child :
+            java.util.Arrays.asList(root.getPopupMenu().getComponents())) {
+          PrettyViewPanel.considerZapItem(child, wrapper, top, groups, seen, title);
+        }
         continue;
       }
-      if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
-        continue;
-      }
-      ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
-      boolean on;
-      try {
-        on = wrapper.isEnable(item);
-      } catch (RuntimeException e) {
-        continue;
-      }
-      if (on
-          && item.getText() != null
-          && !item.getText().isEmpty()
-          && !TEXT_OP_LABELS.contains(item.getText())) {
-        enabled.add(item);
-      }
+      PrettyViewPanel.considerZapItem(component, wrapper, top, groups, seen, null);
     }
+  }
+
+  private static void considerZapItem(
+      Component component,
+      PopupMenuInvokerWrapper wrapper,
+      List<ExtensionPopupMenuItem> top,
+      Map<String, ZapGroup> groups,
+      List<ExtensionPopupMenuItem> seen,
+      String forceGroup) {
+    if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
+      return;
+    }
+    ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
+    if (seen.contains(item)) {
+      return;
+    }
+    seen.add(item);
+    boolean on;
+    try {
+      on = wrapper.isEnable(item);
+    } catch (RuntimeException e) {
+      return;
+    }
+    if (!on
+        || item.getText() == null
+        || item.getText().isEmpty()
+        || TEXT_OP_LABELS.contains(item.getText())) {
+      return;
+    }
+    // Entries already grouped by their addon stay under that title; loose entries honour the
+    // declared parent menu, if any.
+    String group = forceGroup != null
+        ? forceGroup
+        : item.getParentMenuName();
+    if (group == null || group.isEmpty()) {
+      top.add(item);
+      return;
+    }
+    ZapGroup existing = groups.get(group);
+    if (existing == null) {
+      existing = new ZapGroup(group);
+      groups.put(group, existing);
+    }
+    existing.members.add(item);
   }
 
   /** Labels RSyntax's own popup already provides; never duplicated from ZAP's popup. */
