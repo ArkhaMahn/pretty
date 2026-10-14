@@ -3,7 +3,6 @@ package org.zaproxy.zap.extension.prettyview.ui;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.HeadlessException;
-import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
@@ -21,12 +20,16 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.awt.event.MouseWheelListener;
 import java.io.IOException;
-import java.util.function.BiConsumer;
-import java.util.function.BooleanSupplier;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -44,6 +47,17 @@ import javax.swing.text.JTextComponent;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rtextarea.RTextScrollPane;
+import org.parosproxy.paros.control.Control;
+import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
+import org.parosproxy.paros.network.HttpMessage;
+import org.parosproxy.paros.view.MainPopupMenu;
+import org.parosproxy.paros.view.View;
+import org.zaproxy.zap.extension.httppanel.Message;
+import org.zaproxy.zap.extension.httppanel.view.text.HttpPanelTextView;
+import org.zaproxy.zap.view.messagecontainer.MessageContainer;
+import org.zaproxy.zap.view.messagecontainer.http.DefaultSingleHttpMessageContainer;
+import org.zaproxy.zap.view.popup.PopupMenuUtils;
+import org.zaproxy.zap.view.popup.PopupMenuUtils.PopupMenuInvokerWrapper;
 
 public final class PrettyViewPanel
 extends JPanel {
@@ -61,12 +75,8 @@ extends JPanel {
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
   private DisplayLineSplitter.Split split;
   private CopyAction copyAction;
-  /** Shows ZAP's message popup (Attack and friends) when set by the owning view. */
-  private BiConsumer<Integer, Integer> messageActionsShower;
-  /** Whether a message backing the editor is currently available for message actions. */
-  private BooleanSupplier messageActionsAvailable;
-  /** Last right-click point, relative to the text area, for the ZAP actions entry. */
-  private Point lastPopupPoint;
+  /** The current ZAP-action section, rebuilt on every show and dropped on the next. */
+  private final List<Component> zapSection = new ArrayList<Component>();
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
 
@@ -178,7 +188,6 @@ extends JPanel {
     if (!SwingUtilities.isRightMouseButton(event)) {
       return;
     }
-    this.lastPopupPoint = new Point(event.getPoint());
     if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
       int position = this.textArea.viewToModel2D(event.getPoint());
       if (position >= 0) {
@@ -231,10 +240,6 @@ extends JPanel {
 
     menu.addSeparator();
 
-    JMenuItem zapItem = new JMenuItem("ZAP actions...");
-    zapItem.addActionListener(e -> this.showZapActions());
-    menu.add(zapItem);
-
     menu.addPopupMenuListener(new PopupMenuListener() {
       @Override
       public void popupMenuWillBecomeVisible(PopupMenuEvent event) {
@@ -247,6 +252,7 @@ extends JPanel {
         cutItem.setEnabled(area.isEditable() && hasSelection);
         pasteItem.setEnabled(area.isEditable());
         deleteItem.setEnabled(area.isEditable() && hasSelection);
+        PrettyViewPanel.this.rebuildZapSection(menu);
       }
 
       @Override
@@ -270,22 +276,109 @@ extends JPanel {
     }
   }
 
-  /** Shows ZAP's own message popup (Attack, Open/Resend, ...) at the right-click point. */
-  private void showZapActions() {
-    if (this.messageActionsShower == null
-        || (this.messageActionsAvailable != null && !this.messageActionsAvailable.getAsBoolean())) {
+  /**
+   * Rebuilds the ZAP message-action section at the end of the menu: the enabled entries of ZAP's
+   * own popup for the current message, cloned in so text operations and message actions share one
+   * menu. Runs on every show, so the section always matches the message under the cursor.
+   */
+  private void rebuildZapSection(JPopupMenu menu) {
+    for (Component doomed : this.zapSection) {
+      menu.remove(doomed);
+    }
+    this.zapSection.clear();
+    Message message = this.model.getMessage();
+    if (!(message instanceof HttpMessage)) {
       return;
     }
-    Point at = this.lastPopupPoint;
-    if (at == null) {
+    MainPopupMenu popup;
+    PopupMenuInvokerWrapper wrapper;
+    try {
+      View view = View.getSingleton();
+      if (view == null) {
+        return;
+      }
+      popup = view.getPopupMenu();
+      MessageContainer<?> container = new DefaultSingleHttpMessageContainer(
+          HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
+          this.textArea,
+          (HttpMessage) message);
+      wrapper = PopupMenuUtils.getPopupMenuInvokerWrapper(container);
+    } catch (RuntimeException e) {
+      return;
+    }
+    List<ExtensionPopupMenuItem> enabled = new ArrayList<ExtensionPopupMenuItem>();
+    for (Component component : popup.getComponents()) {
+      if (!PopupMenuUtils.isExtensionPopupMenuItem(component)) {
+        continue;
+      }
+      ExtensionPopupMenuItem item = (ExtensionPopupMenuItem) component;
+      boolean on;
       try {
-        java.awt.geom.Rectangle2D caret = this.textArea.modelToView2D(this.textArea.getCaretPosition());
-        at = caret == null ? new Point(5, 5) : new Point((int) caret.getX(), (int) caret.getY());
-      } catch (BadLocationException e) {
-        at = new Point(5, 5);
+        on = wrapper.isEnable(item);
+      } catch (RuntimeException e) {
+        continue;
+      }
+      if (on && !TEXT_OP_LABELS.contains(item.getText())) {
+        enabled.add(item);
       }
     }
-    this.messageActionsShower.accept(at.x, at.y);
+    if (enabled.isEmpty()) {
+      return;
+    }
+    enabled.sort((first, second) -> Integer.compare(second.getWeight(), first.getWeight()));
+    boolean safeMode = PrettyViewPanel.isSafeMode();
+    Map<String, JMenu> submenus = new LinkedHashMap<String, JMenu>();
+    for (ExtensionPopupMenuItem item : enabled) {
+      if (item.precedeWithSeparator()) {
+        JSeparator separator = new JSeparator();
+        menu.add(separator);
+        this.zapSection.add(separator);
+      }
+      JMenuItem clone = PrettyViewPanel.cloneItem(item, safeMode);
+      String parent = item.getParentMenuName();
+      if (parent == null || parent.isEmpty()) {
+        menu.add(clone);
+        this.zapSection.add(clone);
+      } else {
+        JMenu submenu = submenus.get(parent);
+        if (submenu == null) {
+          submenu = new JMenu(parent);
+          submenus.put(parent, submenu);
+          menu.add(submenu);
+          this.zapSection.add(submenu);
+        }
+        submenu.add(clone);
+      }
+      if (item.succeedWithSeparator()) {
+        JSeparator separator = new JSeparator();
+        menu.add(separator);
+        this.zapSection.add(separator);
+      }
+    }
+    PopupMenuUtils.removeConsecutiveSeparators(menu);
+    PopupMenuUtils.removeTopAndBottomSeparators(menu);
+  }
+
+  /** Text-operation labels already heading this menu; never duplicated from ZAP's popup. */
+  private static final Set<String> TEXT_OP_LABELS = Set.of(
+      "Copy", "Cut", "Paste", "Delete", "Select All",
+      "Find...", "Find Next", "Find Previous");
+
+  private static JMenuItem cloneItem(ExtensionPopupMenuItem item, boolean safeMode) {
+    JMenuItem clone = new JMenuItem(item.getText(), item.getIcon());
+    for (ActionListener listener : item.getActionListeners()) {
+      clone.addActionListener(listener);
+    }
+    clone.setEnabled(item.isEnabled() && (!safeMode || item.isSafe()));
+    return clone;
+  }
+
+  private static boolean isSafeMode() {
+    try {
+      return Control.getSingleton().getMode().equals(Control.Mode.safe);
+    } catch (RuntimeException e) {
+      return false;
+    }
   }
 
   /** Copies the selection to the clipboard; a no-op without a selection. */
@@ -335,17 +428,6 @@ extends JPanel {
     } catch (HeadlessException | IllegalStateException | SecurityException | UnsupportedFlavorException | IOException e) {
       // No pasteable string available; the text is left untouched.
     }
-  }
-
-  /**
-   * Hands the panel ZAP's message popup, shown directly on right-click.
-   *
-   * <p>Availability is queried on every right-click, so no menu appears while no message backs the
-   * editor.
-   */
-  public void setMessageActions(BooleanSupplier available, BiConsumer<Integer, Integer> shower) {
-    this.messageActionsAvailable = available;
-    this.messageActionsShower = shower;
   }
 
   /** Walks to the next find hit; the popup's Find Next entry calls this. */

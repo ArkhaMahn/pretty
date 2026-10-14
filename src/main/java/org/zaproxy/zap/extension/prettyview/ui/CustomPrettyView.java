@@ -15,14 +15,11 @@ import org.apache.commons.configuration.FileConfiguration;
 import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.TokenMakerFactory;
-import org.parosproxy.paros.network.HttpMessage;
-import org.parosproxy.paros.view.View;
 import org.zaproxy.zap.extension.httppanel.Message;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelView;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelViewModel;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelViewModelEvent;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelViewModelListener;
-import org.zaproxy.zap.extension.httppanel.view.text.HttpPanelTextView;
 import org.zaproxy.zap.extension.prettyview.async.PrettyWorker;
 import org.zaproxy.zap.extension.prettyview.detect.MessageSplitter;
 import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
@@ -31,7 +28,6 @@ import org.zaproxy.zap.extension.prettyview.formatters.UniversalPrettifierManage
 import org.zaproxy.zap.extension.search.SearchMatch;
 import org.zaproxy.zap.extension.search.SearchMatch.Location;
 import org.zaproxy.zap.extension.search.SearchableHttpPanelView;
-import org.zaproxy.zap.view.messagecontainer.http.DefaultSingleHttpMessageContainer;
 
 public class CustomPrettyView
 implements HttpPanelView,
@@ -93,40 +89,7 @@ SearchableHttpPanelView {
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
     this.textArea = this.createTextArea();
     this.panel = new PrettyViewPanel(this.textArea, this.model);
-    this.panel.setMessageActions(this::hasHttpMessage, this::showCoreMessageMenu);
     this.model.addHttpPanelViewModelListener(this);
-  }
-
-  private boolean hasHttpMessage() {
-    return this.model.getMessage() instanceof HttpMessage;
-  }
-
-  /**
-   * Opens ZAP's own message popup (Attack and friends) at the right-click point.
-   *
-   * <p>Mirrors what the core text views do: the click-point component carries a single-message
-   * container under the same container name the core views use, so message actions enable exactly
-   * as they do next door.
-   */
-  private void showCoreMessageMenu(int x, int y) {
-    Message message = this.model.getMessage();
-    if (!(message instanceof HttpMessage)) {
-      return;
-    }
-    View view;
-    try {
-      view = View.getSingleton();
-    } catch (RuntimeException e) {
-      return;
-    }
-    if (view == null) {
-      return;
-    }
-    DefaultSingleHttpMessageContainer container = new DefaultSingleHttpMessageContainer(
-        HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
-        this.panel.getTextArea(),
-        (HttpMessage) message);
-    view.getPopupMenu().show(container, x, y);
   }
 
   private RSyntaxTextArea createTextArea() {
