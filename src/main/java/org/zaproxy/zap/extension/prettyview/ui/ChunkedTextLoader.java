@@ -36,7 +36,7 @@ final class ChunkedTextLoader {
   static RSyntaxDocument buildDocument(String text, String style, BooleanSupplier stillWanted) {
     String content = text == null ? "" : text;
     RSyntaxDocument document = new RSyntaxDocument(
-        new BoundedTokenMakerFactory(TokenMakerFactory.getDefaultInstance()), style);
+        new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()), style);
     try {
       for (int offset = 0; offset < content.length(); offset += SLICE_CHARS) {
         if (!stillWanted.getAsBoolean()) {

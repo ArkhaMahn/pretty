@@ -15,11 +15,17 @@ public final class LargePayloadPolicy {
   /** Past this longest line, wrapping stops looking on word boundaries. See {@link #shouldWrap}. */
   public static final int MAX_WORD_WRAP_LINE_CHARS = 20000;
   /**
-   * Past this longest line, highlighting is dropped for that line by the token maker: lexing
-   * tens of thousands of characters on every scroll is what reads as scroll lag.
+   * Past this longest line, syntax highlighting is dropped.
    *
-   * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a
-   * repaint is set by the longest line rather than the part of it on screen.
+   * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a repaint
+   * is set by the longest line rather than by the part of it on screen. A 118 871-char prettified JSON
+   * response holding one 54 332-char line repainted in 132 ms median against a 16 ms frame, which is what
+   * scrolling stuttering looks like; the same bytes with that one line split into 1 000-char lines
+   * repainted in 3 ms.
+   *
+   * <p>In practice the displayed text is split before it gets here, so no line reaches this limit and a
+   * long payload keeps its highlighting. The limit stays as the guard for text that reaches the editor
+   * unsplit, which is why callers pass the text they are about to display rather than the formatted text.
    */
   public static final int MAX_SYNTAX_LINE_CHARS = 20000;
 
@@ -47,7 +53,9 @@ public final class LargePayloadPolicy {
    *
    * <p>Word wrapping has to search each line for break opportunities, and a line with no spaces to break
    * at is the worst case, so past the limit the line is wrapped at any character instead. That is cheap,
-   * and it renders the same characters identically.
+   * and it renders the same characters identically. Callers pass the text they are about to display, which
+   * {@link DisplayLineSplitter} has already broken into short lines, so in practice this is true and long
+   * payloads still break on word boundaries.
    */
   public static boolean shouldWrapOnWordBoundaries(String text) {
     return LargePayloadPolicy.longestLineLength(text) <= LargePayloadPolicy.MAX_WORD_WRAP_LINE_CHARS;
@@ -72,6 +80,29 @@ public final class LargePayloadPolicy {
     if (text != null && text.length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
+    if (LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
+      return "text/plain";
+    }
+    return SyntaxStyleMapper.syntaxStyleOf(format);
+  }
+
+  /**
+   * The style for a payload that is about to be displayed as {@code split}.
+   *
+   * <p>The two limits answer different questions and so are asked of different texts. The character limit
+   * is about the size of the payload, so it is asked of the formatted text: the displayed text is the same
+   * characters plus the seams {@link DisplayLineSplitter} added, and a payload sitting within a few
+   * hundred characters of the limit would cross it on seams alone and lose its highlighting for no reason.
+   * The line limit is about what the editor has to tokenize, so it is asked of the displayed text, which
+   * is the only text the editor ever holds.
+   */
+  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format) {
+    if (split.originalText().length() > SYNTAX_OFF_LIMIT_CHARS) {
+      return "text/plain";
+    }
+    if (LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
+      return "text/plain";
+    }
     return SyntaxStyleMapper.syntaxStyleOf(format);
   }
 
@@ -91,13 +122,20 @@ public final class LargePayloadPolicy {
     area.setFractionalFontMetricsEnabled(true);
   }
 
-  /**
-   * Editor settings for a payload about to be displayed: wrapping follows the displayed text,
-   * because that is the text whose lines the editor lays out.
-   */
-  static void applyForSize(RSyntaxTextArea area, String text) {
+  public static void applyForSize(RSyntaxTextArea area, String text) {
     area.setLineWrap(true);
     area.setWrapStyleWord(LargePayloadPolicy.shouldWrapOnWordBoundaries(text));
+    area.setAntiAliasingEnabled(true);
+  }
+
+  /**
+   * The editor settings for a payload that is about to be displayed as {@code split}.
+   *
+   * <p>Wrapping is judged on the displayed text, because that is the text whose lines the editor lays out.
+   */
+  static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split) {
+    area.setLineWrap(true);
+    area.setWrapStyleWord(LargePayloadPolicy.shouldWrapOnWordBoundaries(split.displayText()));
     area.setAntiAliasingEnabled(true);
   }
 }

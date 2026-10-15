@@ -61,8 +61,8 @@ plain text.
   characters in one document, because each chunk pays a full re-layout of everything inserted so far.
   The document is therefore built detached on the worker thread (tokenized as it goes, abandoned at
   the next slice boundary if superseded) and swapped in with one layout pass (~35 ms for the same
-  payload). Wrapping stays on throughout: soft word-wrap lays the text at the viewport width,
-  so what lands is final — no re-flow jump at the end.
+  payload). Wrapping stays on throughout: the text arrives already broken into display lines no longer
+  than `DisplayLineSplitter.MAX_CHUNK_CHARS`, so what lands is final — no re-flow jump at the end.
   A side benefit of the swap is that a load never lands in undo history.
   Measured by `/tmp/opencode/verify/LoadPaintProbe.java` and `/tmp/opencode/verify/EndToEndLoad.java`.
 - **The editor follows ZAP's light/dark look and feel** (`EditorTheme.palette`, `PrettySyntaxScheme`). The
@@ -100,7 +100,8 @@ plain text.
   put their search where the message is, so this is the same idea brought into the Pretty view, and it is
   backed by RSTA's own `SearchEngine` rather than a second implementation. The view also implements
   ZAP's `SearchableHttpPanelView`, so the global Search tab finds hits in Pretty tabs too: `search`
-  reports display hits as header/body-relative offsets, and `highlight` selects them in the editor.
+  maps display hits back through the split into header/body-relative offsets, and `highlight` selects
+  them in the editor.
 - **One flat right-click menu, text actions first** (`PrettyTextPopupItem`). Right-clicking a Pretty
   editor opens ZAP's own message popup — Attack, Find, run, invoke and everything else, exactly as on
   the core panels — headed by the text actions (Undo / Redo / Cut / Copy / Paste / Delete, the same
@@ -111,16 +112,22 @@ plain text.
   target is captured fresh on every show. Copy resolves the action map at click time, so it is the
   split-aware copy that hands back the message's characters rather than the editor's inserted line
   breaks. Asserted by `/tmp/opencode/verify/TextPopupVerify.java`.
-- **Long lines are never fractured for display** (soft word-wrap plus `BoundedTokenMaker`).
-  Wrapping alone was never enough to keep scrolling smooth in an earlier design, because the editor
-  wraps by handing the whole logical line to a layout view and redoing that work on every repaint.
-  One 54 331-char line in the 118 871-char prettified response above cost **17 ms median and 70 ms
-  p95 per repaint** at 18 pt, which is the stutter felt while scrolling up and down - so lines used
-  to be hard-split every few thousand characters, which cut words in half on wide monitors. The
-  splitting is gone: the display text is the formatted text, and soft word-wrap lays it at the
-  viewport width. What keeps scrolling smooth instead is that absurdly long lines are never lexed:
-  a fresh line past 20 000 characters is handed over as one plain token, so there is no per-repaint
-  lexing cost and no token heap for it, while every other line keeps its full highlighting.
+- **Over-long lines are broken at 2 000-character boundaries, held back to 4 000 while a string or a
+  comment is open** (`DisplayLineSplitter.copyChunked`). Wrapping alone is not enough to keep scrolling
+  smooth, because the editor wraps by handing the whole logical line to a layout view and redoing that
+  work on every repaint. One 54 331-char line in the 118 871-char prettified response above cost
+  **17 ms median and 70 ms p95 per repaint** at 18 pt, which is the stutter felt while scrolling up and
+  down. The identical characters handed to the editor as 2 000-char lines repaint in **6 ms median and
+  21 ms p95**. The seam between pieces shows in the editor but not in the payload: every copy hands back
+  the characters as the response holds them, and an edited body is written back to the message in its
+  original form rather than with the seams in it. A break is held off while a string literal or a comment
+  is open, so a long `"aaaa…"` reaches the editor whole; a string longer than 4 000 is cut as late as it
+  can be, and the half beyond the seam is still drawn as a string. That last part is `ContinuedStringTokenMaker`:
+  a token maker that sees the previous line end with an open quote records the quote and the delegate's own
+  continuation state in the value it returns, and reads the next line from there — up to the closing quote
+  as one string token, the rest handed back to the delegate as the language it belongs to. Without it the
+  editor tokenizes the continuation from scratch and it reads as bare text. Chunk size was
+  measured, not guessed: 1 000 chars gave 7 ms/20 ms, 2 000 gave 5-6 ms/14-21 ms, 4 000 gave 8 ms/19 ms.
 - **The font is ZAP's, not a hardcoded one** (`EditorTheme.configuredFont`). The editor, its gutter and its
   overview ruler all use the font ZAP is configured to use for work panels — the one set under *Configure
   Fonts* — falling back to ZAP's own default font when the user has not set one. This is the same lookup
@@ -131,17 +138,29 @@ plain text.
   `LargePayloadPolicy.applyBaseline` also enables fractional font metrics here: a monospaced glyph is not a
   whole number of pixels wide, and RSTA only turns fractional measurement on by itself on some platforms,
   so asking for it makes the same text space the same everywhere.
-- **Syntax highlighting survives an over-long line** (`BoundedTokenMaker`, `LargePayloadPolicy`).
-  Highlighting used to be dropped for a whole payload over one pathological line. Now only that line
-  goes plain: the editor re-tokenizes the whole logical line that a painted row belongs to, so the
-  per-line bail above bounds the repaint cost, and every other line keeps its colours. The 10 MiB
-  whole-payload cap (`SYNTAX_OFF_LIMIT_CHARS`) stays as the token-heap guard. Anti-aliasing was never
-  the culprit either: turning it off moved the 132 ms median only to 122 ms, which is why it is now
-  simply always on.
-- **Size limits are asked of the payload** (`LargePayloadPolicy`). A character limit — unhighlighted text past
-  `SYNTAX_OFF_LIMIT_CHARS` (5 MiB) — asks how big the payload is, so it is asked of the formatted text.
-  The line limit — wrapping style — asks what the editor has to lay out, so it is asked of the displayed
-  text, which is the only text the editor holds.
+- **Syntax highlighting survives an over-long line** (`LargePayloadPolicy.syntaxStyleFor`). Highlighting
+  used to be dropped for a payload with a pathologically long line, because the editor re-tokenizes the
+  whole logical line that a painted row belongs to, so repaint cost is set by the *longest line* rather
+  than by the part of it on screen: a 118 871-char prettified JSON response holding one 54 332-char line
+  repainted in 132 ms median against a 16 ms frame. That was measured before lines were being split for
+  display, and it no longer applies, because the editor is now handed pieces of at most 4 000 characters
+  and never holds the 54 332-char line at all. The style is therefore decided from the text the editor
+  actually receives (`split.displayText()`) rather than from the formatted text: judging the formatted
+  text would read a long line off a document that no longer contains one and strip the colours off a
+  payload that is entirely highlightable. Restoring it costs nothing measurable — 3-5 ms median and
+  7-9 ms p95 per repaint over 60 scroll positions with `text/json` on, against 10 ms/23 ms for the same
+  text unhighlighted on the same machine, which is inside the noise. The 132 ms figure above is why the
+  limit still exists for text that reaches the editor unsplit. Anti-aliasing was never the culprit
+  either: turning it off moved the 132 ms median only to 122 ms, which is why it is now simply always on.
+- **Size limits are asked of the payload, line limits of the displayed text** (`LargePayloadPolicy`). The
+  two answer different questions, so they read different texts. A character limit — unhighlighted text past
+  `SYNTAX_OFF_LIMIT_CHARS` (5 MiB) — asks how big the payload is, so it is asked of the formatted text. The
+  line limits — wrapping style and `MAX_SYNTAX_LINE_CHARS` — ask what the editor has to lay out and tokenize,
+  so they are asked of the split text, which is the only text the editor holds. Asking a size limit of the
+  split text would credit the seams to the payload: on the response above the split text is 118 927
+  characters against a formatted 118 871, which is enough to flip a payload that sat within 56 characters of
+  a limit. This distinction only matters because the seams exist; anti-aliasing, which had a character limit
+  of its own until it was removed, was judged on the formatted text throughout.
   (`PrettyDefaultViewSelector`). ZAP sorts its default view selectors by order ascending and opens the first
   one that matches, so the position matters: ZAP ships an image selector at 20 and large request and
   response selectors at 50, and this one sits at 30. That is above the image selector, so an image response
@@ -309,10 +328,14 @@ Gradle is also configured (`org.zaproxy.add-on` 0.13.1, Java 17, ZAP 2.17.0) if 
   recently: it asserts that no CSS output line ends in a comma, that a `url(data:…)` comes back
   character for character, and that no JavaScript line is left holding a lone `;`, `)` `]` or `,` —
   for assignments, calls, callbacks, object members and nested blocks alike.
-- `/tmp/opencode/verify/NoSplitCheck.java` asserts the display text is the formatted text:
-  no inserted breaks anywhere, copy/save/search/highlight all operate on identical offsets, and a
-  67 304-char line from the live Google telemetry response renders (plain, by the per-line bail)
-  while the rest of the payload keeps its colours.
+- `/tmp/opencode/verify/SplitCheck.java` (11 227 checks) covers the display split, including the
+  string rule: a payload whose two strings straddle the 2 000-character boundary comes back in one
+  piece per string, no break lands inside a string short enough to keep whole, a comment's apostrophe
+  does not miscount as one, and every split still hands the original text back.
+- `/tmp/opencode/verify/ZooplusTokenCheck.java` runs the split of the zooplus.com homepage through
+  `ContinuedStringTokenMaker` and asserts that every display line ending inside an open string is
+  followed by a line whose first token is that same string. It finds 63 open-string lines and 0
+  uncoloured continuations; run against the stock token maker the same payload loses all 63.
 
 ### Defects fixed
 

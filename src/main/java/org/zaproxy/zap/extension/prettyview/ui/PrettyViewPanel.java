@@ -55,6 +55,7 @@ extends JPanel {
   /** Set once the user scrolls or clicks during a load, after which the view is left entirely alone. */
   private boolean userMovedView;
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
+  private DisplayLineSplitter.Split split;
   private CopyAction copyAction;
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
@@ -68,7 +69,6 @@ extends JPanel {
     // detached so only one menu can ever appear; text operations come from globally registered
     // entries that act directly on this editor.
     this.textArea.setPopupMenu(null);
-    this.installCopyAction();
     this.textArea.addMouseListener(new MouseAdapter() {
       @Override
       public void mousePressed(MouseEvent event) {
@@ -310,10 +310,11 @@ extends JPanel {
   }
 
   /**
-   * Installs the clipboard copy action once: it writes the selection straight to the
-   * clipboard on the captured editor, so menu and keyboard copies never depend on focus.
+   * Reminds the panel how the displayed text was broken up, so a copy hands back the characters as the
+   * response holds them rather than as the editor shows them.
    */
-  private void installCopyAction() {
+  public void setSplit(DisplayLineSplitter.Split split) {
+    this.split = split;
     if (this.copyAction != null) {
       return;
     }
@@ -328,6 +329,32 @@ extends JPanel {
         this.copyAction,
         KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK),
         JComponent.WHEN_FOCUSED);
+  }
+
+  private String selectedTextAsFormatted() {
+    if (this.split == null) {
+      return null;
+    }
+    // The break offsets only describe the text as loaded; once edited they stop meaning
+    // anything, so an edited selection copies literally (see CopyAction).
+    if (!this.split.isDisplayText(this.textArea.getText())) {
+      return null;
+    }
+    int from = this.textArea.getSelectionStart();
+    int to = this.textArea.getSelectionEnd();
+    if (from == to) {
+      return null;
+    }
+    if (from > to) {
+      int swap = from;
+      from = to;
+      to = swap;
+    }
+    try {
+      return this.split.originalRange(from, to);
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
   /** Menu Copy: split-aware once a payload is shown, literal before the first load. */
@@ -370,14 +397,18 @@ extends JPanel {
         }
         return;
       }
-      // The display text is the message text, so the selection copies literally. Never put
-      // an empty string on the clipboard for a non-empty selection.
-      try {
-        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
-            new StringSelection(selected), null);
-        return;
-      } catch (HeadlessException | IllegalStateException | SecurityException e) {
-        LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
+      String formatted = PrettyViewPanel.this.selectedTextAsFormatted();
+      // Never put an empty string on the clipboard for a non-empty selection: when the split
+      // mapping comes back empty (edited text, or a break-only span) the literal selection is
+      // what the user asked for.
+      if (formatted != null && !formatted.isEmpty()) {
+        try {
+          Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+              new StringSelection(formatted), null);
+          return;
+        } catch (HeadlessException | IllegalStateException | SecurityException e) {
+          LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
+        }
       }
       if (this.delegate != null) {
         this.delegate.actionPerformed(event);
