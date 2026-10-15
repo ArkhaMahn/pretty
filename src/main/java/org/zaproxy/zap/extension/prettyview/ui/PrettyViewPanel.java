@@ -136,6 +136,7 @@ extends JPanel {
     }
     Message message = this.model.getMessage();
     if (!(message instanceof HttpMessage)) {
+      LOGGER.info("PrettyView menu: no HttpMessage, menu skipped (diag-menu-1)");
       return;
     }
     try {

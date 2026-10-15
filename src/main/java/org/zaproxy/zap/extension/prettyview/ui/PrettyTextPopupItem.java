@@ -13,6 +13,8 @@ import javax.swing.Action;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
 import org.zaproxy.zap.view.messagecontainer.MessageContainer;
 import org.zaproxy.zap.view.popup.ExtensionPopupMenuComponent;
@@ -27,6 +29,7 @@ import org.zaproxy.zap.view.popup.ExtensionPopupMenuComponent;
  */
 public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   private static final long serialVersionUID = 1L;
+  private static final Logger LOGGER = LogManager.getLogger(PrettyTextPopupItem.class);
 
   /** The text actions. Weights match ZAP's own text entries so core order is kept. */
   public enum Kind {
@@ -93,6 +96,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   @Override
   public boolean isEnableForMessageContainer(MessageContainer<?> container) {
     boolean ours = container != null && this.capture(container.getComponent());
+    LOGGER.info("PrettyView menu item {} enable={} (diag-menu-1)", this.kind, ours);
     if (ours) {
       this.refreshEnabled();
     }
@@ -160,6 +164,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   }
 
   private void onClick(ActionEvent event) {
+    LOGGER.info("PrettyView menu item {} clicked (diag-menu-1)", this.kind);
     JTextComponent area = this.invoker;
     PrettyViewPanel panel = this.panel;
     if (area == null || panel == null) {
