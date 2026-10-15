@@ -14,13 +14,11 @@ import java.util.List;
  * 14 ms p95, because a wrapped line that fits inside a screenful is cheap to lay out and a wrapped line
  * that spans 1 000 of them is not.
  *
- * <p>So breaks used to go into the text the editor shows rather than being left to the editor. The
- * editor wraps softly at the view width on top of that, but a hard break still ends the line wherever
- * it lands - mid-word on a wide monitor - which reads badly. The threshold therefore sits where only
- * absurd lines ever reach it ({@value #CHUNK_CHARS} characters, matching the editor's own syntax
- * guard): ordinary payloads are never fractured and simply take the view width, while pathological
- * lines are still bounded for repaint cost, and then prefer to break after a space rather than
- * mid-word.
+ * <p>So breaks go into the text the editor shows rather than being left to the editor - but
+ * only where they have to, and preferably after a space rather than mid-word. The editor wraps
+ * softly at the view width on top of that; the hard breaks exist purely to bound repaint cost,
+ * and the threshold sits far below the editor's own syntax guard so highlighting is never
+ * sacrificed for it.
  *
  * <p>Every break {@link Split} records can be undone: copying a selection hands back the characters
  * as they were in the response, and writing an edited body back to the message does the same.
@@ -33,17 +31,18 @@ import java.util.List;
 final class DisplayLineSplitter {
 
   /**
-   * Longest line handed to the editor. Ordinary payloads never reach it and are never fractured;
-   * only absurd lines are broken, which keeps repaint cost and the token heap bounded.
+   * Longest line handed to the editor. It sits far below the editor's own syntax guard, so a
+   * payload keeps its highlighting; anything longer is broken up, which keeps repaint cost and
+   * the token heap bounded.
    */
-  static final int CHUNK_CHARS = 20000;
+  static final int CHUNK_CHARS = 2000;
 
   /**
    * How far a break may be held off while the character at the boundary is inside a string: a string
    * crossing a chunk boundary is kept whole up to this length, and only a longer one is split. Both
    * lengths keep the line well inside the point where laying one out costs a frame.
    */
-  static final int MAX_CHUNK_CHARS = 40000;
+  static final int MAX_CHUNK_CHARS = 4000;
 
   /**
    * How far past the chunk limit to look for a space or tab to break after, so a forced break
