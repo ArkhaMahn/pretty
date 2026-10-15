@@ -16,6 +16,7 @@ public enum PayloadFormat {
   SQL("application/sql", "text/x-sql", "application/x-sql"),
   CSV("text/csv", "application/csv", "text/tab-separated-values"),
   MARKDOWN("text/markdown", "text/x-markdown"),
+  SSE("text/event-stream"),
   PLAIN_TEXT("text/plain");
 
   private final List<String> mediaTypes;

@@ -38,6 +38,9 @@ public final class SyntaxStyleMapper {
       case CSV: {
         return "text/csv";
       }
+      case SSE: {
+        return "text/sse";
+      }
       case MARKDOWN: {
         return "text/markdown";
       }

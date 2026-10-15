@@ -181,6 +181,13 @@ public final class ContentTypeSniffer {
     if (SQL_START.matcher(probe).find()) {
       return PayloadFormat.SQL;
     }
+    // Before the form check: a single-line "data:a=1" carries '=' and no spaces, which the form
+    // rule would otherwise read as a pair, and a "data: {...}" line carries braces the CSS rule
+    // would read as a declaration block. The field-colon shape answers first instead, and a
+    // genuine form never qualifies: pairs join with '=' rather than the ':' SSE fields require.
+    if (ContentTypeSniffer.looksLikeSse(window)) {
+      return PayloadFormat.SSE;
+    }
     if (ContentTypeSniffer.isFormUrlEncoded(probe)) {
       return PayloadFormat.FORM_URLENCODED;
     }
@@ -191,6 +198,60 @@ public final class ContentTypeSniffer {
       return PayloadFormat.MARKDOWN;
     }
     return PayloadFormat.PLAIN_TEXT;
+  }
+
+  /**
+   * Whether the window reads as a server-sent-events stream: lines of {@code event:}, {@code
+   * data:}, {@code id:} or {@code retry:} fields, or {@code :}-led comments. Two field lines are
+   * required, so a lone {@code data:} line - a data URL, say - stays plain text. A linear scan on
+   * purpose; no regex runs over the payload here.
+   */
+  private static boolean looksLikeSse(String window) {
+    int fields = 0;
+    int lineStart = 0;
+    int n = window.length();
+    for (int i = 0; i <= n && fields < 2; ++i) {
+      if (i != n && window.charAt(i) != '\n') {
+        continue;
+      }
+      int end = i;
+      if (end > lineStart && window.charAt(end - 1) == '\r') {
+        --end;
+      }
+      if (ContentTypeSniffer.isSseFieldLine(window, lineStart, end)) {
+        ++fields;
+      } else if (end != lineStart && !ContentTypeSniffer.isSseCommentLine(window, lineStart, end)) {
+        return false;
+      }
+      lineStart = i + 1;
+    }
+    return fields >= 2;
+  }
+
+  private static boolean isSseCommentLine(String window, int from, int to) {
+    return from < to && window.charAt(from) == ':';
+  }
+
+  private static boolean isSseFieldLine(String window, int from, int to) {
+    int colon = -1;
+    for (int i = from; i < to; ++i) {
+      char c = window.charAt(i);
+      if (c == ':') {
+        colon = i;
+        break;
+      }
+      if (c == ' ' || c == '\t') {
+        return false;
+      }
+    }
+    if (colon < 0) {
+      return false;
+    }
+    int length = colon - from;
+    return (length == 5 && window.regionMatches(from, "event", 0, 5))
+        || (length == 4 && window.regionMatches(from, "data", 0, 4))
+        || (length == 2 && window.regionMatches(from, "id", 0, 2))
+        || (length == 5 && window.regionMatches(from, "retry", 0, 5));
   }
 
   /**

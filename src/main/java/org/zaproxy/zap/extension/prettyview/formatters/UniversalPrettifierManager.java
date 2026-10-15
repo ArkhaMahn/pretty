@@ -36,6 +36,7 @@ public final class UniversalPrettifierManager {
     this.register(new MultipartPrettifier(this));
     this.register(new SqlPrettifier());
     this.register(new CsvPrettifier());
+    this.register(new SsePrettifier());
     this.register(new PlainTextPrettifier());
   }
 

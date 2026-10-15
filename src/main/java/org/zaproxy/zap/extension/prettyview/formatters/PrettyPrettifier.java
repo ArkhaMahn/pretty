@@ -43,6 +43,7 @@ public interface PrettyPrettifier {
     MULTIPART,
     SQL,
     CSV,
+    SSE,
     PLAIN_TEXT;
 
     public PayloadFormat toPayloadFormat() {

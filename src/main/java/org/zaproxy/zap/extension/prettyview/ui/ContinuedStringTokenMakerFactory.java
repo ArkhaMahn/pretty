@@ -18,12 +18,19 @@ final class ContinuedStringTokenMakerFactory extends TokenMakerFactory {
 
   @Override
   protected TokenMaker getTokenMakerImpl(String key) {
+    if ("text/sse".equals(key)) {
+      // No stock tokenizer colours event streams; the delegate would answer null and the editor
+      // would fall back to plain text.
+      return new SseTokenMaker();
+    }
     TokenMaker maker = this.delegate.getTokenMaker(key);
     return maker == null ? null : new ContinuedStringTokenMaker(maker);
   }
 
   @Override
   public Set<String> keySet() {
-    return this.delegate.keySet();
+    Set<String> keys = new java.util.HashSet<>(this.delegate.keySet());
+    keys.add("text/sse");
+    return keys;
   }
 }
