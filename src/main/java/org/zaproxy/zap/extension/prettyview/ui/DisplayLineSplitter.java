@@ -14,10 +14,16 @@ import java.util.List;
  * 14 ms p95, because a wrapped line that fits inside a screenful is cheap to lay out and a wrapped line
  * that spans 1 000 of them is not.
  *
- * <p>So the breaks are put into the text the editor shows rather than left to the editor. That makes the
- * displayed text differ from the formatted text, so every {@link Split} keeps enough information to undo
- * them: copying a selection hands back the characters as they were in the response, and writing an edited
- * body back to the message does the same.
+ * <p>So breaks used to go into the text the editor shows rather than being left to the editor. The
+ * editor wraps softly at the view width on top of that, but a hard break still ends the line wherever
+ * it lands - mid-word on a wide monitor - which reads badly. The threshold therefore sits where only
+ * absurd lines ever reach it ({@value #CHUNK_CHARS} characters, matching the editor's own syntax
+ * guard): ordinary payloads are never fractured and simply take the view width, while pathological
+ * lines are still bounded for repaint cost, and then prefer to break after a space rather than
+ * mid-word.
+ *
+ * <p>Every break {@link Split} records can be undone: copying a selection hands back the characters
+ * as they were in the response, and writing an edited body back to the message does the same.
  *
  * <p>A break is never put where it would cut a string literal in half if one is in reach. The mapping
  * that undoes the break is indifferent to what the characters were, but the editor is not: the second
@@ -26,15 +32,24 @@ import java.util.List;
  */
 final class DisplayLineSplitter {
 
-  /** Longest line handed to the editor, chosen from measurements rather than guessed. */
-  static final int CHUNK_CHARS = 2000;
+  /**
+   * Longest line handed to the editor. Ordinary payloads never reach it and are never fractured;
+   * only absurd lines are broken, which keeps repaint cost and the token heap bounded.
+   */
+  static final int CHUNK_CHARS = 20000;
 
   /**
    * How far a break may be held off while the character at the boundary is inside a string: a string
    * crossing a chunk boundary is kept whole up to this length, and only a longer one is split. Both
    * lengths keep the line well inside the point where laying one out costs a frame.
    */
-  static final int MAX_CHUNK_CHARS = 4000;
+  static final int MAX_CHUNK_CHARS = 40000;
+
+  /**
+   * How far past the chunk limit to look for a space or tab to break after, so a forced break
+   * lands between words rather than mid-word. Bounded, so spaceless runs still terminate.
+   */
+  static final int SPACE_LOOKAHEAD_CHARS = 400;
 
   private static final int NONE = 0;
   private static final int LINE_COMMENT = 1;
@@ -79,10 +94,21 @@ final class DisplayLineSplitter {
     int chunkStart = from;
     char quote = 0;
     int comment = NONE;
+    // Absolute index at which a pending break is forced even without a space: -1 while no
+    // break is pending. Set once a chunk runs past the limit outside strings; a fresh break
+    // then lands after the next space or tab, or at the deadline when none shows up.
+    int seekDeadline = -1;
     int i = from;
     while (i < to) {
-      if (quote == 0 ? i - chunkStart >= CHUNK_CHARS : i - chunkStart >= MAX_CHUNK_CHARS) {
+      if (seekDeadline < 0 && quote == 0 && i - chunkStart >= CHUNK_CHARS) {
+        seekDeadline = i + SPACE_LOOKAHEAD_CHARS;
+      }
+      if (seekDeadline >= 0 && i >= seekDeadline && quote == 0) {
+        // Give up waiting for a space (inside comments, or a spaceless run): cut here so the
+        // chunk stays bounded. Strings never take this path; they keep their own longer cap.
         chunkStart = emitBreak(text, chunkStart, i, out, breaks);
+        seekDeadline = -1;
+        continue;
       }
       char c = text.charAt(i);
       if (comment == LINE_COMMENT) {
@@ -109,6 +135,9 @@ final class DisplayLineSplitter {
           quote = 0;
         }
         ++i;
+        if (i - chunkStart >= MAX_CHUNK_CHARS) {
+          chunkStart = emitBreak(text, chunkStart, i, out, breaks);
+        }
         continue;
       }
       if (c == '/' && i + 1 < to) {
@@ -121,6 +150,17 @@ final class DisplayLineSplitter {
       }
       if (c == '"' || c == '\'' || c == '`') {
         quote = c;
+        // A fresh string abandons the pending seek: the longer string cap takes over, and the
+        // top of the loop re-arms a seek afterwards if the chunk is still over the limit.
+        seekDeadline = -1;
+        ++i;
+        continue;
+      }
+      if (seekDeadline >= 0 && (c == ' ' || c == '\t')) {
+        chunkStart = emitBreak(text, chunkStart, i + 1, out, breaks);
+        seekDeadline = -1;
+        i = chunkStart;
+        continue;
       }
       ++i;
     }
