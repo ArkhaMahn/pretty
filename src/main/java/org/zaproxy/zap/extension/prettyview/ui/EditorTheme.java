@@ -2,10 +2,6 @@ package org.zaproxy.zap.extension.prettyview.ui;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.io.Serializable;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import javax.swing.JScrollPane;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.zaproxy.zap.utils.DisplayUtils;
@@ -17,8 +13,10 @@ final class EditorTheme {
   private static final String FALLBACK_FONT_FAMILY = "Monospaced";
 
   private static final int FALLBACK_FONT_SIZE = 18;
-  static final Palette LIGHT = new Palette("light", new Color(255, 255, 255), new Color(0, 0, 0), new Color(216, 228, 240), new Color(0, 0, 0), new Color(0, 0, 0));
-  static final Palette DARK = new Palette("dark", new Color(47, 47, 47), PrettySyntaxScheme.FOREGROUND, new Color(38, 79, 120), PrettySyntaxScheme.FOREGROUND, new Color(174, 175, 173));
+  static final Palette LIGHT = new Palette("light", new Color(255, 255, 255), new Color(0, 0, 0), new Color(216, 228, 240), new Color(0, 0, 0), new Color(0, 0, 0),
+      new Color(128, 128, 128), new Color(128, 128, 128), new Color(224, 224, 224), new Color(234, 234, 255), new Color(0, 0, 128));
+  static final Palette DARK = new Palette("dark", new Color(47, 47, 47), PrettySyntaxScheme.FOREGROUND, new Color(38, 79, 120), PrettySyntaxScheme.FOREGROUND, new Color(174, 175, 173),
+      new Color(133, 133, 133), new Color(197, 197, 197), new Color(62, 62, 62), new Color(58, 61, 65), new Color(110, 110, 110));
   static final Color SEARCH_HIGHLIGHT = new Color(0, 122, 204);
 
   private EditorTheme() {
@@ -66,6 +64,8 @@ final class EditorTheme {
     area.setSelectedTextColor(palette.getForeground());
     area.setSelectionColor(palette.getSelectionBackground());
     area.setMarkOccurrencesColor(SEARCH_HIGHLIGHT);
+    area.setMatchedBracketBGColor(palette.getBracketBackground());
+    area.setMatchedBracketBorderColor(palette.getBracketBorder());
     area.setCurrentLineHighlightColor(palette.getBackground());
     Font font = EditorTheme.configuredFont();
     area.setFont(font);
@@ -75,6 +75,20 @@ final class EditorTheme {
       pane.setBorder(null);
       pane.getViewport().setBackground(palette.getBackground());
       pane.setBackground(palette.getBackground());
+      if (pane instanceof org.fife.ui.rtextarea.RTextScrollPane) {
+        org.fife.ui.rtextarea.Gutter gutter =
+            ((org.fife.ui.rtextarea.RTextScrollPane) pane).getGutter();
+        if (gutter != null) {
+          gutter.setBackground(palette.getBackground());
+          gutter.setBorderColor(palette.getBackground());
+          gutter.setLineNumberColor(palette.getLineNumber());
+          gutter.setCurrentLineNumberColor(palette.getForeground());
+          gutter.setFoldBackground(palette.getBackground());
+          gutter.setFoldIndicatorForeground(palette.getFoldIcon());
+          gutter.setFoldIndicatorArmedForeground(palette.getForeground());
+          gutter.setArmedFoldBackground(palette.getFoldArmedBackground());
+        }
+      }
     }
     area.repaint();
   }
@@ -86,14 +100,25 @@ final class EditorTheme {
     private final Color selectionBackground;
     private final Color selectionForeground;
     private final Color caret;
+    private final Color lineNumber;
+    private final Color foldIcon;
+    private final Color foldArmedBackground;
+    private final Color bracketBackground;
+    private final Color bracketBorder;
 
-    private Palette(String name, Color background, Color foreground, Color selectionBackground, Color selectionForeground, Color caret) {
+    private Palette(String name, Color background, Color foreground, Color selectionBackground, Color selectionForeground, Color caret,
+        Color lineNumber, Color foldIcon, Color foldArmedBackground, Color bracketBackground, Color bracketBorder) {
       this.name = name;
       this.background = background;
       this.foreground = foreground;
       this.selectionBackground = selectionBackground;
       this.selectionForeground = selectionForeground;
       this.caret = caret;
+      this.lineNumber = lineNumber;
+      this.foldIcon = foldIcon;
+      this.foldArmedBackground = foldArmedBackground;
+      this.bracketBackground = bracketBackground;
+      this.bracketBorder = bracketBorder;
     }
 
     String getName() {
@@ -113,29 +138,24 @@ final class EditorTheme {
       return this.foreground;
     }
 
-    Map<String, Object> asLookAndFeelKeys() {
-      LinkedHashMap<String, Serializable> keys = new LinkedHashMap<String, Serializable>();
-      keys.put("RTextArea.background", this.background);
-      keys.put("RTextArea.foreground", this.foreground);
-      keys.put("RTextArea.inactiveForeground", this.foreground);
-      keys.put("RTextArea.caretForeground", this.caret);
-      keys.put("RTextArea.selectedTextForeground", this.selectionForeground);
-      keys.put("RTextArea.secondaryBackground", this.background);
-      keys.put("RTextArea.gutter.background", this.background);
-      keys.put("RTextArea.lineNumber.background", this.background);
-      keys.put("RTextArea.lineNumber.foreground", this.foreground);
-      keys.put("RTextArea.lineNumber.currentLineForeground", this.foreground);
-      keys.put("RTextArea.zoomGutter.background", this.background);
-      keys.put("RTextArea.zoomGutter.foreground", this.foreground.darker());
-      keys.put("RTextArea.overviewRuler.background", this.background);
-      keys.put("RTextArea.overviewRuler.foreground", this.foreground.darker());
-      keys.put("RTextArea.overviewRuler.thickCaretForeground", this.foreground);
-      keys.put("RTextArea.overviewRuler.thinCaretForeground", this.foreground.darker());
-      keys.put("RTextArea.borderColor", this.background);
-      keys.put("RTextArea.font", EditorTheme.configuredFont());
-      keys.put("ScrollPane.background", this.background);
-      keys.put("Viewport.background", this.background);
-      return Collections.unmodifiableMap(keys);
+    Color getLineNumber() {
+      return this.lineNumber;
+    }
+
+    Color getFoldIcon() {
+      return this.foldIcon;
+    }
+
+    Color getFoldArmedBackground() {
+      return this.foldArmedBackground;
+    }
+
+    Color getBracketBackground() {
+      return this.bracketBackground;
+    }
+
+    Color getBracketBorder() {
+      return this.bracketBorder;
     }
 
     Color getCaret() {
