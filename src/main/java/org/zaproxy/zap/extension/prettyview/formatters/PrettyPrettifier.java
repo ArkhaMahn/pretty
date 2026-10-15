@@ -6,11 +6,9 @@ public interface PrettyPrettifier {
   /**
    * One level of indentation in prettified output.
    *
-   * <p>Four spaces, which is what both backends that do their own indenting default to: jsoup's
-   * {@code indentAmount} and Xalan's {@code indent-amount} are 4 unless told otherwise, so this value
-   * leaves them at their own default rather than overriding them.
+   * <p>Two spaces, matching Burp's Pretty tab: their indenter draws {@code " ".repeat(2 * level)}.
    */
-  String INDENT = "    ";
+  String INDENT = "  ";
 
   /** Width of {@link #INDENT}, for the APIs that want a column count instead of a string. */
   int INDENT_WIDTH = INDENT.length();
