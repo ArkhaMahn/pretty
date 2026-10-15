@@ -17,10 +17,10 @@ import org.fife.ui.rsyntaxtextarea.TokenTypes;
  * repaint is set by the longest line rather than the part of it on screen. Lexing tens of
  * thousands of characters on every scroll is what reads as scroll lag, and the token heap for
  * millions of tokens is what eats memory. A line past {@link #MAX_LEX_LINE_CHARS} that starts
- * fresh is therefore handed over as one identifier token instead: no lexing, one token, same
- * characters, and it paints as plain text. An identifier (rather than a null token) keeps every
- * token traversal - bracket matching included - on its ordinary path. Everything else tokenizes
- * exactly as the delegate would.
+ * fresh is therefore handed over as identifier chunks instead: no lexing, a bounded token count,
+ * same characters, and it paints as plain text. Identifiers (rather than a single null token)
+ * keep every token traversal - bracket matching included - on its ordinary path. Everything else
+ * tokenizes exactly as the delegate would.
  *
  * <p>Only fresh lines bail: a line reached from inside a multiline construct (a block comment or
  * string spilling over from above, i.e. anything but {@link TokenTypes#NULL}) still lexes
@@ -64,12 +64,37 @@ final class BoundedTokenMakerFactory extends TokenMakerFactory {
       if (initialTokenType == TokenTypes.NULL
           && text != null
           && text.count > MAX_LEX_LINE_CHARS) {
-        return new TokenImpl(
-            text.array, text.offset, text.offset + text.count - 1, startOffset,
-            TokenTypes.IDENTIFIER, 0);
+        return BoundedTokenMaker.chunks(text, startOffset);
       }
       return this.delegate.getTokenList(text, initialTokenType, startOffset);
     }
+
+    /**
+     * Splits a monster line into identifier chunks. Each chunk is an ordinary paintable token,
+     * so every traversal (bracket matching, painting, sub-token slicing) walks a normal token
+     * stream instead of tripping over a shape no other maker produces.
+     */
+    private static Token chunks(Segment text, int startOffset) {
+      TokenImpl head = null;
+      TokenImpl tail = null;
+      int end = text.offset + text.count;
+      for (int from = text.offset; from < end; from += CHUNK_CHARS) {
+        int to = Math.min(from + CHUNK_CHARS, end);
+        TokenImpl token = new TokenImpl(
+            text.array, from, to - 1, startOffset + from - text.offset,
+            TokenTypes.IDENTIFIER, 0);
+        if (head == null) {
+          head = token;
+        } else {
+          tail.setNextToken(token);
+        }
+        tail = token;
+      }
+      return head;
+    }
+
+    /** Longest piece a bailed line is handed over in. Small enough to walk cheaply. */
+    static final int CHUNK_CHARS = 2000;
 
     @Override
     public int getLastTokenTypeOnLine(Segment text, int initialTokenType) {
