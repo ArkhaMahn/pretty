@@ -96,7 +96,8 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   @Override
   public boolean isEnableForMessageContainer(MessageContainer<?> container) {
     boolean ours = container != null && this.capture(container.getComponent());
-    LOGGER.info("PrettyView menu item {} enable={} (diag-menu-1)", this.kind, ours);
+    LOGGER.info("PrettyView menu item {}@{} enable={} (diag-menu-2)", this.kind,
+        Integer.toHexString(System.identityHashCode(this)), ours);
     if (ours) {
       this.refreshEnabled();
     }
@@ -105,6 +106,8 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
 
   @Override
   public void dismissed(ExtensionPopupMenuComponent unused) {
+    LOGGER.info("PrettyView menu item {}@{} dismissed (diag-menu-2)", this.kind,
+        Integer.toHexString(System.identityHashCode(this)));
     this.invoker = null;
     this.panel = null;
   }
@@ -164,7 +167,8 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   }
 
   private void onClick(ActionEvent event) {
-    LOGGER.info("PrettyView menu item {} clicked (diag-menu-1)", this.kind);
+    LOGGER.info("PrettyView menu item {}@{} clicked (diag-menu-2)", this.kind,
+        Integer.toHexString(System.identityHashCode(this)));
     JTextComponent area = this.invoker;
     PrettyViewPanel panel = this.panel;
     if (area == null || panel == null) {
