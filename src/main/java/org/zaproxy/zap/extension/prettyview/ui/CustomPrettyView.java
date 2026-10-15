@@ -46,6 +46,8 @@ SearchableHttpPanelView {
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
+  /** The detected format of the loaded message; form posts rejoin pair lines on save. */
+  private PayloadFormat format;
   private String lastFormatted = "";
   private DisplayLineSplitter.Split split;
   /**
@@ -127,14 +129,8 @@ SearchableHttpPanelView {
       MessageSplitter.Parts parts = MessageSplitter.split(raw);
       this.headerLength = parts.getHeaders().length();
     }
-    if (this.isEditable()) {
-      // Edit/write mode (Manual Request Editor, Requester, Break): show the raw wire bytes,
-      // never prettified. Probes are often deliberately malformed to test peer responses, and
-      // any reformatting would mangle them - both on display and, worse, in save(), which
-      // persists the display text. Read-only views keep prettifying below.
-      this.applyRawOnEdt(ticket, raw, contentType);
-      return;
-    }
+    // Editable views prettify exactly like read-only ones: what you see is laid out and
+    // highlighted, and save() maps it back to wire bytes (forms rejoin their pair lines).
     Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
     this.worker.submit(raw, contentType, this.bodyOnly, this.prettifierManager, onResult);
   }
@@ -171,54 +167,17 @@ SearchableHttpPanelView {
     }
   }
 
-  /**
-   * Shows raw wire bytes in an editable request view: no prettifier runs, so deliberately
-   * malformed probes reach the server exactly as typed. The format is still detected, but only
-   * to pick syntax highlighting. The prettify threshold is bypassed on purpose - an editor must
-   * show the whole message to edit it, exactly like the core text views.
-   */
-  private void applyRawOnEdt(int ticket, String raw, String contentType) {
-    String bodyForDetect = raw;
-    if (!this.bodyOnly && !this.headerOnly) {
-      bodyForDetect = MessageSplitter.split(raw).getBody();
-    }
-    PayloadFormat highlightFormat =
-        this.prettifierManager.detectFormat(contentType, bodyForDetect);
-    if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
-      this.applyRawIfCurrent(ticket, split,
-          ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, highlightFormat),
-              () -> ticket == this.generation.get()));
-    } else {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
-      String style = LargePayloadPolicy.syntaxStyleFor(split, highlightFormat);
-      RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
-          () -> ticket == this.generation.get());
-      SwingUtilities.invokeLater(() -> this.applyRawIfCurrent(ticket, split, document));
-    }
-  }
-
-  private void applyRawIfCurrent(
-      int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
-    if (ticket != this.generation.get() || document == null) {
-      return;
-    }
-    // Raw mode carries no prettifier notes; clear any stale notice (and the loading spinner).
-    this.panel.clearNotice();
-    this.installSplit(ticket, split, document);
-  }
-
   private void applyIfCurrent(
       int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document) {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
+    this.format = result.getFormat();
     this.updateNotice(result);
     this.installSplit(ticket, split, document);
   }
 
-  /** Installs a built document into the editor; shared by the prettified and raw paths. */
+  /** Installs a built document into the editor. */
   private void installSplit(int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
     this.split = split;
     this.panel.setSplit(split);
@@ -343,9 +302,23 @@ SearchableHttpPanelView {
     }
     // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
     // then persist through the model like every core text view (see PrettyViewModel.setData).
-    // The display holds wire bytes in every mode - raw in editors, faithfully laid out
-    // elsewhere - so there is no decoded form to re-encode here.
     String formatted = this.split == null ? current : this.split.toOriginal(current);
+    if (this.format == PayloadFormat.FORM_URLENCODED && !this.headerOnly) {
+      // Form pairs display one per line with '&' kept at each line end; rejoin them so the
+      // wire body holds no newlines. Anything the user typed stays theirs, byte for byte.
+      String body;
+      String head;
+      if (this.bodyOnly) {
+        head = "";
+        body = formatted;
+      } else {
+        String[] parts = PrettyViewModel.split(formatted);
+        head = parts[0];
+        body = parts[1];
+      }
+      body = body.replace("\r", "").replace("\n", "");
+      formatted = head.isEmpty() ? body : head + "\n\n" + body;
+    }
     this.model.setData(formatted);
     this.lastFormatted = current;
   }
