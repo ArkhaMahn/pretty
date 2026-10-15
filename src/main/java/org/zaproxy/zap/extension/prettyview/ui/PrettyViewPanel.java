@@ -310,6 +310,17 @@ extends JPanel {
   }
 
   /**
+   * Visible width available to text, in pixels, or -1 when called off the event thread where
+   * Swing components must not be measured.
+   */
+  int viewportWidth() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      return -1;
+    }
+    return this.scrollPane.getViewport().getExtentSize().width;
+  }
+
+  /**
    * Reminds the panel how the displayed text was broken up, so a copy hands back the characters as the
    * response holds them rather than as the editor shows them.
    */

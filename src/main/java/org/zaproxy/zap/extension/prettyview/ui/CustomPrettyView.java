@@ -110,10 +110,30 @@ SearchableHttpPanelView {
     this.scheduleRefresh();
   }
 
+  /**
+   * How many characters fit a display line: the viewport width in average glyphs, clamped.
+   * Measured on the event thread, where the viewport can be asked; anywhere else the caller
+   * gets the default and the text breaks as it used to.
+   */
+  private int wrapColumn() {
+    int width = this.panel.viewportWidth();
+    if (width <= 0) {
+      return DisplayLineSplitter.DEFAULT_WRAP_COLUMN;
+    }
+    java.awt.FontMetrics metrics = this.textArea.getFontMetrics(this.textArea.getFont());
+    String sample = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    int charWidth = Math.max(1, metrics.stringWidth(sample) / sample.length());
+    int column = width / charWidth;
+    return Math.min(
+        DisplayLineSplitter.MAX_WRAP_COLUMN,
+        Math.max(DisplayLineSplitter.MIN_WRAP_COLUMN, column));
+  }
+
   private void scheduleRefresh() {
     int ticket = this.generation.incrementAndGet();
     String raw = this.model.getData();
     String contentType = this.model.getContentType();
+    int column = this.wrapColumn();
     if (raw.isEmpty()) {
       this.worker.cancelPending();
       this.headerLength = 0;
@@ -132,10 +152,12 @@ SearchableHttpPanelView {
       // never prettified. Probes are often deliberately malformed to test peer responses, and
       // any reformatting would mangle them - both on display and, worse, in save(), which
       // persists the display text. Read-only views keep prettifying below.
-      this.applyRawOnEdt(ticket, raw, contentType);
+      this.applyRawOnEdt(ticket, raw, contentType, column);
       return;
     }
-    Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
+    int refreshColumn = column;
+    Consumer<PrettyResult> onResult =
+        result -> this.applyOnEdt(ticket, (PrettyResult)result, refreshColumn);
     this.worker.submit(raw, contentType, this.bodyOnly, this.prettifierManager, onResult);
   }
 
@@ -147,14 +169,14 @@ SearchableHttpPanelView {
       this.panel.clearNotice();
       this.headerLength = 0;
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
-          DisplayLineSplitter.split(""),
+          DisplayLineSplitter.split("", this.wrapColumn()),
           ChunkedTextLoader.buildDocument("", "text/plain", () -> ticket == this.generation.get()));
     });
   }
 
-  private void applyOnEdt(int ticket, PrettyResult result) {
+  private void applyOnEdt(int ticket, PrettyResult result, int column) {
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), column);
       this.applyIfCurrent(ticket, result, split,
           ChunkedTextLoader.buildDocument(split.displayText(),
               LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
@@ -163,7 +185,7 @@ SearchableHttpPanelView {
       // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
       // both run here on the worker thread so the EDT only installs the result. A stale ticket
       // abandons the build at the next slice boundary, and applyIfCurrent drops whatever is left.
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), column);
       String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
       RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
           () -> ticket == this.generation.get());
@@ -177,7 +199,7 @@ SearchableHttpPanelView {
    * to pick syntax highlighting. The prettify threshold is bypassed on purpose - an editor must
    * show the whole message to edit it, exactly like the core text views.
    */
-  private void applyRawOnEdt(int ticket, String raw, String contentType) {
+  private void applyRawOnEdt(int ticket, String raw, String contentType, int column) {
     String bodyForDetect = raw;
     if (!this.bodyOnly && !this.headerOnly) {
       bodyForDetect = MessageSplitter.split(raw).getBody();
@@ -185,13 +207,13 @@ SearchableHttpPanelView {
     PayloadFormat highlightFormat =
         this.prettifierManager.detectFormat(contentType, bodyForDetect);
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw, column);
       this.applyRawIfCurrent(ticket, split,
           ChunkedTextLoader.buildDocument(split.displayText(),
               LargePayloadPolicy.syntaxStyleFor(split, highlightFormat),
               () -> ticket == this.generation.get()));
     } else {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw, column);
       String style = LargePayloadPolicy.syntaxStyleFor(split, highlightFormat);
       RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
           () -> ticket == this.generation.get());
