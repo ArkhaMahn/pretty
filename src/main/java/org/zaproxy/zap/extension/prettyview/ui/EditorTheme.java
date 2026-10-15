@@ -13,10 +13,12 @@ final class EditorTheme {
   private static final String FALLBACK_FONT_FAMILY = "Monospaced";
 
   private static final int FALLBACK_FONT_SIZE = 18;
-  static final Palette LIGHT = new Palette("light", new Color(255, 255, 255), new Color(0, 0, 0), new Color(216, 228, 240), new Color(0, 0, 0), new Color(0, 0, 0),
-      new Color(128, 128, 128), new Color(128, 128, 128), new Color(224, 224, 224), new Color(234, 234, 255), new Color(0, 0, 128));
-  static final Palette DARK = new Palette("dark", new Color(47, 47, 47), PrettySyntaxScheme.FOREGROUND, new Color(38, 79, 120), PrettySyntaxScheme.FOREGROUND, new Color(174, 175, 173),
-      new Color(133, 133, 133), new Color(197, 197, 197), new Color(62, 62, 62), new Color(58, 61, 65), new Color(110, 110, 110));
+  static final Palette LIGHT = new Palette("light", new Color(251, 251, 251), new Color(20, 20, 20), new Color(235, 241, 246), new Color(20, 20, 20), new Color(43, 43, 43),
+      new Color(120, 120, 120), new Color(120, 120, 120), new Color(225, 224, 224), new Color(234, 234, 255), new Color(0, 0, 128),
+      new Color(221, 221, 221), new Color(255, 255, 0));
+  static final Palette DARK = new Palette("dark", new Color(50, 51, 52), PrettySyntaxScheme.FOREGROUND, new Color(83, 132, 178), new Color(255, 255, 255), new Color(197, 199, 200),
+      new Color(160, 160, 160), new Color(160, 160, 160), new Color(72, 76, 83), new Color(58, 61, 65), new Color(110, 110, 110),
+      new Color(85, 85, 85), new Color(0, 16, 103));
   static final Color SEARCH_HIGHLIGHT = new Color(0, 122, 204);
 
   private EditorTheme() {
@@ -64,6 +66,7 @@ final class EditorTheme {
     area.setSelectedTextColor(palette.getForeground());
     area.setSelectionColor(palette.getSelectionBackground());
     area.setMarkOccurrencesColor(SEARCH_HIGHLIGHT);
+    area.setMarkAllHighlightColor(palette.getSearchMark());
     area.setMatchedBracketBGColor(palette.getBracketBackground());
     area.setMatchedBracketBorderColor(palette.getBracketBorder());
     area.setCurrentLineHighlightColor(palette.getBackground());
@@ -80,7 +83,7 @@ final class EditorTheme {
             ((org.fife.ui.rtextarea.RTextScrollPane) pane).getGutter();
         if (gutter != null) {
           gutter.setBackground(palette.getBackground());
-          gutter.setBorderColor(palette.getBackground());
+          gutter.setBorderColor(palette.getGutterBorder());
           gutter.setLineNumberColor(palette.getLineNumber());
           gutter.setCurrentLineNumberColor(palette.getForeground());
           gutter.setFoldBackground(palette.getBackground());
@@ -105,9 +108,12 @@ final class EditorTheme {
     private final Color foldArmedBackground;
     private final Color bracketBackground;
     private final Color bracketBorder;
+    private final Color gutterBorder;
+    private final Color searchMark;
 
     private Palette(String name, Color background, Color foreground, Color selectionBackground, Color selectionForeground, Color caret,
-        Color lineNumber, Color foldIcon, Color foldArmedBackground, Color bracketBackground, Color bracketBorder) {
+        Color lineNumber, Color foldIcon, Color foldArmedBackground, Color bracketBackground, Color bracketBorder,
+        Color gutterBorder, Color searchMark) {
       this.name = name;
       this.background = background;
       this.foreground = foreground;
@@ -119,6 +125,8 @@ final class EditorTheme {
       this.foldArmedBackground = foldArmedBackground;
       this.bracketBackground = bracketBackground;
       this.bracketBorder = bracketBorder;
+      this.gutterBorder = gutterBorder;
+      this.searchMark = searchMark;
     }
 
     String getName() {
@@ -156,6 +164,14 @@ final class EditorTheme {
 
     Color getBracketBorder() {
       return this.bracketBorder;
+    }
+
+    Color getGutterBorder() {
+      return this.gutterBorder;
+    }
+
+    Color getSearchMark() {
+      return this.searchMark;
     }
 
     Color getCaret() {

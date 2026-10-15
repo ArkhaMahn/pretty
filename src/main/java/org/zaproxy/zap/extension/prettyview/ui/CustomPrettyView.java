@@ -144,7 +144,7 @@ SearchableHttpPanelView {
       this.headerLength = 0;
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
           DisplayLineSplitter.split(""),
-          ChunkedTextLoader.buildDocument("", "text/plain", () -> ticket == this.generation.get()));
+          ChunkedTextLoader.buildDocument("", "text/plain", 0, () -> ticket == this.generation.get()));
     });
   }
 
@@ -154,7 +154,7 @@ SearchableHttpPanelView {
       this.applyIfCurrent(ticket, result, split,
           ChunkedTextLoader.buildDocument(split.displayText(),
               LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
-              () -> ticket == this.generation.get()));
+              this.headerEndDisplay(split), () -> ticket == this.generation.get()));
     } else {
       // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
       // both run here on the worker thread so the EDT only installs the result. A stale ticket
@@ -162,9 +162,19 @@ SearchableHttpPanelView {
       DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
       String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
       RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
-          () -> ticket == this.generation.get());
+          this.headerEndDisplay(split), () -> ticket == this.generation.get());
       SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document));
     }
+  }
+
+  /**
+   * Where the header region ends in display coordinates. Body-only views hold no headers, and
+   * header-only views hold nothing but, so the boundary is exact in both cases without
+   * special-casing: {@link #headerLength} is zero for the former and the whole text for the
+   * latter.
+   */
+  private int headerEndDisplay(DisplayLineSplitter.Split split) {
+    return split.toDisplayOffset(this.headerLength);
   }
 
   private void applyIfCurrent(

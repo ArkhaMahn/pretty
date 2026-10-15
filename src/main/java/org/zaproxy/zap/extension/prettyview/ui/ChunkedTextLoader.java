@@ -33,10 +33,13 @@ final class ChunkedTextLoader {
    * then, so no EDT state is touched from here. Token makers are created per line during the
    * inserts and stay with the document.
    */
-  static RSyntaxDocument buildDocument(String text, String style, BooleanSupplier stillWanted) {
+  static RSyntaxDocument buildDocument(
+      String text, String style, int headerEnd, BooleanSupplier stillWanted) {
     String content = text == null ? "" : text;
-    RSyntaxDocument document = new RSyntaxDocument(
-        new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()), style);
+    ContinuedStringTokenMakerFactory factory =
+        new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance());
+    factory.setHeaderEnd(headerEnd);
+    RSyntaxDocument document = new RSyntaxDocument(factory, style);
     try {
       for (int offset = 0; offset < content.length(); offset += SLICE_CHARS) {
         if (!stillWanted.getAsBoolean()) {
