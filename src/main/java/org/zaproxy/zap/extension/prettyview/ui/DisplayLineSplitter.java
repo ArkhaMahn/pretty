@@ -5,19 +5,19 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Breaks over-long logical lines into shorter ones before they reach the editor.
+ * Breaks only monster logical lines before they reach the editor.
  *
- * <p>Wrapping is what keeps a long line readable, but the editor does the wrapping by handing the whole
- * logical line to a layout view, and it re-does that work on every repaint. One 54 331-character line in a
- * 118 871-character response cost 17 ms median and 70 ms p95 to repaint, which is the stutter you feel
- * while scrolling. The same characters handed over as 2 000-character lines repaint in 5 ms median and
- * 14 ms p95, because a wrapped line that fits inside a screenful is cheap to lay out and a wrapped line
- * that spans 1 000 of them is not.
+ * <p>Short lines reach the editor untouched, so what is shown is the formatted text byte for byte
+ * and code folding sees the real structure. Only a line past {@link #SPLIT_LINE_CHARS} is broken,
+ * into {@link #CHUNK_CHARS} pieces, because two costs scale with the longest line rather than with
+ * what is on screen: the editor re-tokenizes the whole logical line a painted row belongs to (past
+ * {@link LargePayloadPolicy#MAX_SYNTAX_LINE_CHARS} the whole document would lose its highlighting),
+ * and an unwrapped row tens of thousands of characters wide asks for a preferred width of hundreds
+ * of thousands of pixels and paints only part of itself.
  *
- * <p>So the breaks are put into the text the editor shows rather than left to the editor. That makes the
- * displayed text differ from the formatted text, so every {@link Split} keeps enough information to undo
- * them: copying a selection hands back the characters as they were in the response, and writing an edited
- * body back to the message does the same.
+ * <p>Every {@link Split} keeps enough information to undo the breaks: copying a selection hands
+ * back the characters as they were in the response, and writing an edited body back to the message
+ * does the same.
  *
  * <p>A break is never put where it would cut a string literal in half if one is in reach. The mapping
  * that undoes the break is indifferent to what the characters were, but the editor is not: the second
@@ -25,6 +25,13 @@ import java.util.List;
  * as bare text. A string within {@link #MAX_CHUNK_CHARS} is therefore taken whole.
  */
 final class DisplayLineSplitter {
+
+  /**
+   * Only lines past this length are broken. Sits well below the syntax line limit, so a displayed
+   * line never costs the document its highlighting, and far below the width where an unwrapped row
+   * stops painting fully - while leaving ordinary lines, which folding needs whole, alone.
+   */
+  static final int SPLIT_LINE_CHARS = 8000;
 
   /** Longest line handed to the editor, chosen from measurements rather than guessed. */
   static final int CHUNK_CHARS = 2000;
@@ -70,7 +77,7 @@ final class DisplayLineSplitter {
   private static void copyChunked(
       String text, int from, int to, StringBuilder out, List<Integer> breaks) {
     int length = to - from;
-    if (length <= CHUNK_CHARS) {
+    if (length <= SPLIT_LINE_CHARS) {
       if (length > 0) {
         out.append(text, from, to);
       }

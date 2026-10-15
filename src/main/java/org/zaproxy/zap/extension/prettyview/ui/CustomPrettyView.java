@@ -468,7 +468,7 @@ SearchableHttpPanelView {
   public void setEditable(boolean editable) {
     // Follow the host panel like every core view; see isEditable. When the effective mode
     // flips (e.g. a Break panel becoming editable around a trapped message), re-render so the
-    // raw/prettified mode matches: raw while editable, prettified while read-only.
+    // editability matches; the display itself is prettified in both modes.
     boolean wasEditable = this.isEditable();
     this.editable = editable;
     if (!this.loading) {

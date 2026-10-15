@@ -21,7 +21,6 @@ import javax.swing.ActionMap;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
-import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
@@ -46,7 +45,7 @@ extends JPanel {
   private static final long serialVersionUID = 1L;
   private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
-  private final JScrollPane scrollPane;
+  private final RTextScrollPane scrollPane;
   private final PrettyNoticeBar noticeBar;
   private final PrettySearchBar searchBar;
   private final Timer tickTimer;
@@ -81,6 +80,7 @@ extends JPanel {
       }
     });
     this.scrollPane = new RTextScrollPane(textArea);
+    this.scrollPane.setFoldIndicatorEnabled(true);
     this.noticeBar = new PrettyNoticeBar();
     this.searchBar = new PrettySearchBar(textArea);
     EditorTheme.apply(textArea, this.scrollPane, EditorTheme.palette());
