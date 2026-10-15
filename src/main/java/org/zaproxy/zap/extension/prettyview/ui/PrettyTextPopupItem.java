@@ -168,8 +168,12 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
     JTextComponent area = this.invoker;
     PrettyViewPanel panel = this.panel;
     if (area == null || panel == null) {
+      LOGGER.warn("PrettyView menu item {} clicked with no captured editor", this.kind);
       return;
     }
+    String selected = area.getSelectedText();
+    LOGGER.debug("PrettyView {} click: editable={} selLen={}", this.kind, area.isEditable(),
+        selected == null ? -1 : selected.length());
     switch (this.kind) {
       case UNDO:
         PrettyTextPopupItem.run(area, "RTA.UndoAction");
@@ -216,7 +220,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
           new StringSelection(selected), null);
       area.replaceSelection("");
     } catch (HeadlessException | IllegalStateException | SecurityException e) {
-      // No clipboard available; the text is left untouched.
+      LOGGER.warn("PrettyView cut failed: clipboard unavailable", e);
     }
   }
 
@@ -233,7 +237,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         area.replaceSelection(text == null ? "" : text);
       }
     } catch (HeadlessException | IllegalStateException | SecurityException | UnsupportedFlavorException | IOException e) {
-      // No pasteable string available; the text is left untouched.
+      LOGGER.warn("PrettyView paste failed: clipboard unavailable", e);
     }
   }
 

@@ -377,7 +377,7 @@ extends JPanel {
       Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
           new StringSelection(selected), null);
     } catch (HeadlessException | IllegalStateException | SecurityException e) {
-      // No clipboard available.
+      LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
     }
   }
 
@@ -407,7 +407,7 @@ extends JPanel {
               new StringSelection(formatted), null);
           return;
         } catch (HeadlessException | IllegalStateException | SecurityException e) {
-          // Fall through to the literal copy below.
+          LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
         }
       }
       if (this.delegate != null) {
