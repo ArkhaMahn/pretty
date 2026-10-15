@@ -46,8 +46,9 @@ SearchableHttpPanelView {
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
+  /** The detected format of the loaded message; form posts rejoin pair lines on save. */
+  private PayloadFormat format;
   private String lastFormatted = "";
-  private DisplayLineSplitter.Split split;
   /**
    * Length of the header region in formatted coordinates. The worker formats the same raw string
    * this is measured from, so the formatted headers are an exact prefix of it.
@@ -96,7 +97,7 @@ SearchableHttpPanelView {
     RSyntaxTextArea area = new PrettyTextArea();
     if (area.getDocument() instanceof RSyntaxDocument) {
       ((RSyntaxDocument) area.getDocument())
-          .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
+          .setTokenMakerFactory(new BoundedTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
     }
     LargePayloadPolicy.applyBaseline(area);
     area.setEditable(false);
@@ -127,14 +128,8 @@ SearchableHttpPanelView {
       MessageSplitter.Parts parts = MessageSplitter.split(raw);
       this.headerLength = parts.getHeaders().length();
     }
-    if (this.isEditable()) {
-      // Edit/write mode (Manual Request Editor, Requester, Break): show the raw wire bytes,
-      // never prettified. Probes are often deliberately malformed to test peer responses, and
-      // any reformatting would mangle them - both on display and, worse, in save(), which
-      // persists the display text. Read-only views keep prettifying below.
-      this.applyRawOnEdt(ticket, raw, contentType);
-      return;
-    }
+    // Editable views prettify exactly like read-only ones: what you see is laid out and
+    // highlighted, and save() persists the display text as the wire bytes.
     Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
     this.worker.submit(raw, contentType, this.bodyOnly, this.prettifierManager, onResult);
   }
@@ -147,85 +142,38 @@ SearchableHttpPanelView {
       this.panel.clearNotice();
       this.headerLength = 0;
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
-          DisplayLineSplitter.split(""),
           ChunkedTextLoader.buildDocument("", "text/plain", () -> ticket == this.generation.get()));
     });
   }
 
   private void applyOnEdt(int ticket, PrettyResult result) {
+    String style = LargePayloadPolicy.syntaxStyleFor(result.getText(), result.getFormat());
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
-      this.applyIfCurrent(ticket, result, split,
-          ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
+      this.applyIfCurrent(ticket, result,
+          ChunkedTextLoader.buildDocument(result.getText(), style,
               () -> ticket == this.generation.get()));
     } else {
-      // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
-      // both run here on the worker thread so the EDT only installs the result. A stale ticket
-      // abandons the build at the next slice boundary, and applyIfCurrent drops whatever is left.
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
-      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
-      RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
+      // Building the document tokenizes it; it runs here on the worker thread so the EDT only
+      // installs the result. A stale ticket abandons the build at the next slice boundary,
+      // and applyIfCurrent drops whatever is left.
+      RSyntaxDocument document = ChunkedTextLoader.buildDocument(result.getText(), style,
           () -> ticket == this.generation.get());
-      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document));
+      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, document));
     }
   }
 
-  /**
-   * Shows raw wire bytes in an editable request view: no prettifier runs, so deliberately
-   * malformed probes reach the server exactly as typed. The format is still detected, but only
-   * to pick syntax highlighting. The prettify threshold is bypassed on purpose - an editor must
-   * show the whole message to edit it, exactly like the core text views.
-   */
-  private void applyRawOnEdt(int ticket, String raw, String contentType) {
-    String bodyForDetect = raw;
-    if (!this.bodyOnly && !this.headerOnly) {
-      bodyForDetect = MessageSplitter.split(raw).getBody();
-    }
-    PayloadFormat highlightFormat =
-        this.prettifierManager.detectFormat(contentType, bodyForDetect);
-    if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
-      this.applyRawIfCurrent(ticket, split,
-          ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, highlightFormat),
-              () -> ticket == this.generation.get()));
-    } else {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(raw);
-      String style = LargePayloadPolicy.syntaxStyleFor(split, highlightFormat);
-      RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
-          () -> ticket == this.generation.get());
-      SwingUtilities.invokeLater(() -> this.applyRawIfCurrent(ticket, split, document));
-    }
-  }
-
-  private void applyRawIfCurrent(
-      int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
+  private void applyIfCurrent(int ticket, PrettyResult result, RSyntaxDocument document) {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
-    // Raw mode carries no prettifier notes; clear any stale notice (and the loading spinner).
-    this.panel.clearNotice();
-    this.installSplit(ticket, split, document);
-  }
-
-  private void applyIfCurrent(
-      int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document) {
-    if (ticket != this.generation.get() || document == null) {
-      return;
-    }
+    this.format = result.getFormat();
     this.updateNotice(result);
-    this.installSplit(ticket, split, document);
+    this.installDocument(ticket, result.getText(), document);
   }
 
-  /** Installs a built document into the editor; shared by the prettified and raw paths. */
-  private void installSplit(int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
-    this.split = split;
-    this.panel.setSplit(split);
-    // The editor is given the split text and so is judged on the split text. Deciding from the formatted
-    // text instead would read a 54 331-char line off a document that no longer holds one, and would strip
-    // the highlighting off a payload whose every line now fits in a screenful.
-    LargePayloadPolicy.applyForSize(this.textArea, split);
+  /** Installs a built document into the editor. */
+  private void installDocument(int ticket, String displayText, RSyntaxDocument document) {
+    LargePayloadPolicy.applyForSize(this.textArea, displayText);
     this.loading = true;
     JTextArea body = this.panel.getTextArea();
     body.setEditable(false);
@@ -239,7 +187,7 @@ SearchableHttpPanelView {
       if (body instanceof RSyntaxTextArea) {
         ((RSyntaxTextArea) body).discardAllEdits();
       }
-      this.lastFormatted = split.displayText();
+      this.lastFormatted = displayText;
       this.loading = false;
       this.panel.setEditable(this.allowsEdits());
       this.panel.endLoad();
@@ -341,12 +289,25 @@ SearchableHttpPanelView {
     if (!this.isEditable()) {
       return;
     }
-    // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
-    // then persist through the model like every core text view (see PrettyViewModel.setData).
-    // The display holds wire bytes in every mode - raw in editors, faithfully laid out
-    // elsewhere - so there is no decoded form to re-encode here.
-    String formatted = this.split == null ? current : this.split.toOriginal(current);
-    this.model.setData(formatted);
+    // The display text is the message text, so persist it directly like every core
+    // text view (see PrettyViewModel.setData) - except form posts, whose pairs display one
+    // per line and rejoin here so the wire body holds no newlines.
+    if (this.format == PayloadFormat.FORM_URLENCODED && !this.headerOnly) {
+      String head;
+      String body;
+      if (this.bodyOnly) {
+        head = "";
+        body = current;
+      } else {
+        String[] parts = PrettyViewModel.split(current);
+        head = parts[0];
+        body = parts[1];
+      }
+      body = body.replace("\r", "").replace("\n", "");
+      this.model.setData(head.isEmpty() ? body : head + "\n\n" + body);
+    } else {
+      this.model.setData(current);
+    }
     this.lastFormatted = current;
   }
 
@@ -362,36 +323,28 @@ SearchableHttpPanelView {
   /**
    * Contributes this view's hits to ZAP's global Search tab.
    *
-   * <p>The pattern runs over the current display text and each hit is mapped back through the
-   * split into formatted coordinates, then classified into the header region or the body region
-   * (offsets relative to the region start, as the core views report). Body offsets are relative
-   * to the <em>formatted</em> body, because pretty-printing is not invertible in general; they
-   * round-trip exactly through {@link #highlight(SearchMatch)} on this view.
+   * <p>The pattern runs over the current display text and each hit is classified into the
+   * header region or the body region (offsets relative to the region start, as the core views
+   * report). Body offsets are relative to the <em>formatted</em> body; they round-trip exactly
+   * through {@link #highlight(SearchMatch)} on this view.
    */
   @Override
   public void search(Pattern pattern, List<SearchMatch> matches) {
-    DisplayLineSplitter.Split split = this.split;
-    if (pattern == null || matches == null || split == null) {
+    if (pattern == null || matches == null) {
       return;
     }
     String display = this.panel.getTextArea().getText();
     if (display.isEmpty()) {
       return;
     }
-    int formattedLength = split.originalText().length();
+    int formattedLength = display.length();
     int bodyStart = Math.min(this.headerLength + 2, formattedLength);
     Location head = this.request ? Location.REQUEST_HEAD : Location.RESPONSE_HEAD;
     Location body = this.request ? Location.REQUEST_BODY : Location.RESPONSE_BODY;
     Matcher matcher = pattern.matcher(display);
     while (matcher.find()) {
-      int start = split.toOriginalOffset(matcher.start());
-      int end = split.toOriginalOffset(matcher.end());
-      if (start < 0) {
-        start = 0;
-      }
-      if (end > formattedLength) {
-        end = formattedLength;
-      }
+      int start = matcher.start();
+      int end = matcher.end();
       if (start >= end) {
         continue;
       }
@@ -408,19 +361,19 @@ SearchableHttpPanelView {
   /**
    * Shows a global-search hit in the editor by selecting it and scrolling it into view.
    *
-   * <p>Region-relative offsets are mapped back to display coordinates through the split, so hits
-   * reported by {@link #search(Pattern, List)} land exactly. Matches from other views are ignored.
+   * <p>Region-relative offsets are display coordinates here, so hits reported by {@link
+   * #search(Pattern, List)} land exactly. Matches from other views are ignored.
    */
   @Override
   public void highlight(SearchMatch match) {
-    DisplayLineSplitter.Split split = this.split;
-    if (match == null || split == null) {
+    if (match == null) {
       return;
     }
     Location location = match.getLocation();
     Location head = this.request ? Location.REQUEST_HEAD : Location.RESPONSE_HEAD;
     Location body = this.request ? Location.REQUEST_BODY : Location.RESPONSE_BODY;
-    int formattedLength = split.originalText().length();
+    String display = this.panel.getTextArea().getText();
+    int formattedLength = display.length();
     int formattedStart;
     int formattedEnd;
     if (location == head) {
@@ -436,8 +389,8 @@ SearchableHttpPanelView {
     if (formattedStart >= formattedEnd) {
       return;
     }
-    int displayStart = split.toDisplayOffset(formattedStart);
-    int displayEnd = split.toDisplayOffset(formattedEnd);
+    int displayStart = formattedStart;
+    int displayEnd = formattedEnd;
     CustomPrettyView.onEdt(() -> {
       RSyntaxTextArea area = this.panel.getTextArea();
       area.setCaretPosition(displayStart);
