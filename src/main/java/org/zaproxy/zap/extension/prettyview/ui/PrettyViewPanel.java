@@ -98,6 +98,7 @@ extends JPanel {
         }
         refreshReplacedItems();
         rebuildZapSection();
+        emitOrderedMenu();
       }
 
       @Override
@@ -191,22 +192,23 @@ extends JPanel {
    * of ZAP's popup for the current message, cloned in, so text operations and message actions
    * share one menu. Runs on every show, so the tail always matches the message under the cursor.
    */
+  /** Fresh message-action entries per show: top-level items plus submenu groups. */
+  private final List<ExtensionPopupMenuItem> zapTop = new ArrayList<ExtensionPopupMenuItem>();
+  private final Map<String, ZapGroup> zapGroups = new LinkedHashMap<String, ZapGroup>();
+
+  /**
+   * Collects the ZAP message-action entries for the current message: the enabled registry
+   * entries, preserving each addon's built submenu structure. Runs on every show, so the
+   * entries always match the message under the cursor.
+   */
   private void rebuildZapSection() {
-    JPopupMenu menu = this.textArea.getPopupMenu();
-    if (menu == null) {
-      return;
-    }
-    for (Component doomed : this.zapSection) {
-      menu.remove(doomed);
-    }
-    this.zapSection.clear();
+    this.zapTop.clear();
+    this.zapGroups.clear();
     Message message = this.model.getMessage();
     if (!(message instanceof HttpMessage)) {
       return;
     }
     PopupMenuInvokerWrapper wrapper;
-    List<ExtensionPopupMenuItem> top = new ArrayList<ExtensionPopupMenuItem>();
-    Map<String, ZapGroup> groups = new LinkedHashMap<String, ZapGroup>();
     List<ExtensionPopupMenuItem> seen = new ArrayList<ExtensionPopupMenuItem>();
     try {
       View view = View.getSingleton();
@@ -222,32 +224,59 @@ extends JPanel {
       // throws ConcurrentModificationException. Vector.toArray is synchronized, making the
       // copy atomic.
       List<JMenuItem> registered = new ArrayList<JMenuItem>(view.getPopupList());
-      PrettyViewPanel.collectZapEntries(registered, wrapper, top, groups, seen);
+      PrettyViewPanel.collectZapEntries(
+          registered, wrapper, this.zapTop, this.zapGroups, seen);
       LOGGER.debug("PrettyView ZAP tail: registry={} top={} groups={}",
-          Integer.valueOf(registered.size()), Integer.valueOf(top.size()),
-          Integer.valueOf(groups.size()));
+          Integer.valueOf(registered.size()), Integer.valueOf(this.zapTop.size()),
+          Integer.valueOf(this.zapGroups.size()));
     } catch (RuntimeException e) {
       LOGGER.warn("PrettyView ZAP tail: failed to enumerate ZAP popup actions", e);
+    }
+  }
+
+  /**
+   * Lays the whole menu out in core order: text entries and message actions merged by weight,
+   * heaviest first, exactly how ZAP orders its own popup. Text entries carry core's own text
+   * weights, so they land mid-menu instead of lumped at the top.
+   */
+  private void emitOrderedMenu() {
+    JPopupMenu menu = this.textArea.getPopupMenu();
+    if (menu == null) {
       return;
     }
-    if (top.isEmpty() && groups.isEmpty()) {
-      return;
+    for (Component doomed : this.zapSection) {
+      menu.remove(doomed);
+    }
+    this.zapSection.clear();
+    for (ReplacedItem replaced : this.replacedItems) {
+      menu.remove(replaced.item);
+    }
+    for (Component component : menu.getComponents()) {
+      if (component instanceof JSeparator) {
+        menu.remove(component);
+      }
     }
     boolean safeMode = PrettyViewPanel.isSafeMode();
-    // Merge top-level entries and submenu groups by weight, heaviest first, mirroring how ZAP
-    // orders its own menu. Groups sort by their heaviest member.
     List<ZapSegment> segments = new ArrayList<ZapSegment>();
-    for (ExtensionPopupMenuItem item : top) {
-      segments.add(new ZapSegment(item.getWeight(), item, null));
+    for (ReplacedItem replaced : this.replacedItems) {
+      segments.add(new ZapSegment(replaced.weight, replaced.item, null, null));
     }
-    for (ZapGroup group : groups.values()) {
+    for (ExtensionPopupMenuItem item : this.zapTop) {
+      segments.add(new ZapSegment(item.getWeight(), null, item, null));
+    }
+    for (ZapGroup group : this.zapGroups.values()) {
       group.members.sort((first, second) -> Integer.compare(second.getWeight(), first.getWeight()));
-      segments.add(new ZapSegment(group.weight(), null, group));
+      segments.add(new ZapSegment(group.weight(), null, null, group));
     }
     segments.sort((first, second) -> Integer.compare(second.weight, first.weight));
     for (ZapSegment segment : segments) {
       if (segment.group == null) {
-        PrettyViewPanel.emitZapItem(menu, segment.item, safeMode, this.zapSection);
+        if (segment.zapItem != null) {
+          PrettyViewPanel.emitZapItem(menu, segment.zapItem, safeMode, this.zapSection);
+        } else {
+          menu.add(segment.direct);
+          this.zapSection.add(segment.direct);
+        }
       } else {
         JMenu submenu = new JMenu(segment.group.title);
         for (ExtensionPopupMenuItem member : segment.group.members) {
@@ -262,15 +291,17 @@ extends JPanel {
     PopupMenuUtils.removeTopAndBottomSeparators(menu);
   }
 
-  /** One row of the tail: either a top-level entry or a whole submenu. */
+  /** One menu row: a ready text entry, a message entry to clone, or a whole submenu. */
   private static final class ZapSegment {
     final int weight;
-    final ExtensionPopupMenuItem item;
+    final JMenuItem direct;
+    final ExtensionPopupMenuItem zapItem;
     final ZapGroup group;
 
-    ZapSegment(int weight, ExtensionPopupMenuItem item, ZapGroup group) {
+    ZapSegment(int weight, JMenuItem direct, ExtensionPopupMenuItem zapItem, ZapGroup group) {
       this.weight = weight;
-      this.item = item;
+      this.direct = direct;
+      this.zapItem = zapItem;
       this.group = group;
     }
   }
@@ -580,12 +611,24 @@ extends JPanel {
   private static final class ReplacedItem {
     final JMenuItem item;
     final BooleanSupplier enabled;
+    final int weight;
 
-    ReplacedItem(JMenuItem item, BooleanSupplier enabled) {
+    ReplacedItem(JMenuItem item, BooleanSupplier enabled, int weight) {
       this.item = item;
       this.enabled = enabled;
+      this.weight = weight;
     }
   }
+
+  /**
+   * Text-operation weights matching ZAP's own text entries (HttpPanelSyntaxHighlightTextArea
+   * registers Undo 19060, Redo 19040, Cut 17080, Copy 17060, Paste 17040, Delete 17020,
+   * Select All 15050), so the merged menu orders exactly like core's. Verified against the
+   * ZAP 2.17.0 bytecode; revisit if ZAP renumbers them.
+   */
+
+  private JMenuItem undoItem;
+  private JMenuItem redoItem;
 
   /**
    * RSyntax's own Cut/Copy/Paste resolve their target through focus state, which has already
@@ -617,6 +660,13 @@ extends JPanel {
       }
       menu.remove(at.get(s).intValue());
       menu.add(replacement, at.get(s).intValue());
+    }
+    // Core's reference menu has no Folding entry; drop RSyntax's submenu for parity.
+    for (Component component : menu.getComponents()) {
+      if (component instanceof JMenu && "Folding".equals(((JMenu) component).getText())) {
+        menu.remove(component);
+        break;
+      }
     }
   }
 
@@ -650,38 +700,50 @@ extends JPanel {
     RSyntaxTextArea area = this.textArea;
     switch (kind) {
       case "undo":
-        return this.register(new JMenuItem("Undo"), area::undoLastAction, area::canUndo);
+        this.undoItem = this.register(new JMenuItem("Undo"), area::undoLastAction,
+            area::canUndo, 19060);
+        return this.undoItem;
       case "redo":
-        return this.register(new JMenuItem("Redo"), area::redoLastAction, area::canRedo);
+        this.redoItem = this.register(new JMenuItem("Redo"), area::redoLastAction,
+            area::canRedo, 19040);
+        return this.redoItem;
       case "cut":
         return this.register(new JMenuItem("Cut"), () -> PrettyViewPanel.cutSelection(area),
-            () -> area.isEditable() && PrettyViewPanel.hasSelection(area));
+            () -> area.isEditable() && PrettyViewPanel.hasSelection(area), 17080);
       case "copy":
         return this.register(new JMenuItem("Copy"), this::copyViaSplit,
-            () -> PrettyViewPanel.hasSelection(area));
+            () -> PrettyViewPanel.hasSelection(area), 17060);
       case "paste":
         return this.register(new JMenuItem("Paste"), () -> PrettyViewPanel.pasteClipboard(area),
-            area::isEditable);
+            area::isEditable, 17040);
       case "delete":
         return this.register(new JMenuItem("Delete"), () -> {
           if (area.isEditable() && PrettyViewPanel.hasSelection(area)) {
             area.replaceSelection("");
           }
-        }, () -> area.isEditable() && PrettyViewPanel.hasSelection(area));
+        }, () -> area.isEditable() && PrettyViewPanel.hasSelection(area), 17020);
       case "selectall":
-        return this.register(new JMenuItem("Select All"), area::selectAll, () -> true);
+        return this.register(new JMenuItem("Select All"), area::selectAll, () -> true, 15050);
       default:
         return null;
     }
   }
 
-  private JMenuItem register(JMenuItem item, Runnable action, BooleanSupplier enabled) {
+  private JMenuItem register(
+      JMenuItem item, Runnable action, BooleanSupplier enabled, int weight) {
     item.addActionListener(e -> action.run());
-    this.replacedItems.add(new ReplacedItem(item, enabled));
+    this.replacedItems.add(new ReplacedItem(item, enabled, weight));
     return item;
   }
 
   private void refreshReplacedItems() {
+    RSyntaxTextArea area = this.textArea;
+    if (this.undoItem != null) {
+      this.undoItem.setText(area.canUndo() ? "Undo" : "Can't Undo");
+    }
+    if (this.redoItem != null) {
+      this.redoItem.setText(area.canRedo() ? "Redo" : "Can't Redo");
+    }
     for (ReplacedItem replaced : this.replacedItems) {
       try {
         replaced.item.setEnabled(replaced.enabled.getAsBoolean());
