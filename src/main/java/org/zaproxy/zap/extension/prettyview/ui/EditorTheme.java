@@ -42,18 +42,19 @@ final class EditorTheme {
   }
 
   /**
-   * The font ZAP is configured to use for work panels, which is where this panel lives.
-   *
-   * <p>This is the same call ZAP makes for its own syntax highlighted text area, so this panel follows the
-   * font the user picked under Configure Fonts, at the same size, and falls back to ZAP's own default font
-   * when they have not picked one. Asking for a font is not free to get wrong: ZAP's font map is empty
-   * until the look and feel publishes a default font, and reading it before then throws, so a failure here
-   * falls back to a monospaced font rather than taking the panel down with it.
+   * The font this panel renders in: a monospace font, like Burp's message editor, unless the
+   * user picked a work-panel font under ZAP's Configure Fonts, which is then honoured as-is.
+   * The size always follows ZAP's setting, so display scaling keeps working; only an
+   * unconfigured family falls back to monospace rather than ZAP's proportional UI font, under
+   * which columns, tables and indentation would not line up.
    */
   static Font configuredFont() {
     try {
-      return FontUtils.getFontWithFallback(FontType.workPanels,
-          FontUtils.getFont(FontType.workPanels).getFontName());
+      if (FontUtils.isDefaultFontSet(FontType.workPanels)) {
+        return FontUtils.getFontWithFallback(FontType.workPanels, FALLBACK_FONT_FAMILY);
+      }
+      return new Font(FALLBACK_FONT_FAMILY, Font.PLAIN,
+          FontUtils.getFont(FontType.workPanels).getSize());
     } catch (RuntimeException | LinkageError e) {
       return new Font(FALLBACK_FONT_FAMILY, Font.PLAIN, FALLBACK_FONT_SIZE);
     }
@@ -85,6 +86,7 @@ final class EditorTheme {
           gutter.setBackground(palette.getBackground());
           gutter.setBorderColor(palette.getGutterBorder());
           gutter.setLineNumberColor(palette.getLineNumber());
+          gutter.setLineNumberFont(font);
           gutter.setCurrentLineNumberColor(palette.getForeground());
           gutter.setFoldBackground(palette.getBackground());
           gutter.setFoldIndicatorForeground(palette.getFoldIcon());
