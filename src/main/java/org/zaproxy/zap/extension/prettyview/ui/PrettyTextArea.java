@@ -40,6 +40,15 @@ final class PrettyTextArea extends RSyntaxTextArea {
   }
 
   /**
+   * No hover tooltips, ever: no fold previews, no link or occurrence tips, nothing following
+   * the mouse over the message.
+   */
+  @Override
+  public String getToolTipText(java.awt.event.MouseEvent event) {
+    return null;
+  }
+
+  /**
    * Burp's editor shapes its own {@code setLineWrap} the same way: the stock flag plus the
    * housekeeping that belongs with it. A fold gutter cannot share its lines with wrapped rows,
    * so folding follows the wrap flag here instead of at every call site - wrapping drops it,

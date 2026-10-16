@@ -90,6 +90,13 @@ final class EditorTheme {
           gutter.setFoldIndicatorForeground(palette.getFoldIcon());
           gutter.setFoldIndicatorArmedForeground(palette.getForeground());
           gutter.setArmedFoldBackground(palette.getFoldArmedBackground());
+          // No collapsed-region previews on hover: the fold gutter shows the folds, never
+          // their hidden text.
+          for (java.awt.Component child : gutter.getComponents()) {
+            if (child instanceof org.fife.ui.rtextarea.FoldIndicator) {
+              ((org.fife.ui.rtextarea.FoldIndicator) child).setShowCollapsedRegionToolTips(false);
+            }
+          }
         }
       }
     }
