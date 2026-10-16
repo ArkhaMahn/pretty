@@ -40,6 +40,16 @@ final class ContinuedStringTokenMakerFactory extends TokenMakerFactory {
         return null;
       }
       maker = new JsonKeyTokenMaker(new ContinuedStringTokenMaker(maker));
+    } else if ("text/css".equals(key)) {
+      // Burp's CSS token boundaries (class and id selectors, hex colours, at-rules) do not line
+      // up with the stock maker's, so the language gets its own tokenizer rather than a retype.
+      maker = new ContinuedStringTokenMaker(new CssTokenMaker());
+    } else if ("text/javascript".equals(key)) {
+      maker = this.delegate.getTokenMaker(key);
+      if (maker == null) {
+        return null;
+      }
+      maker = new JsBackquoteTokenMaker(new ContinuedStringTokenMaker(maker));
     } else {
       maker = this.delegate.getTokenMaker(key);
       if (maker == null) {

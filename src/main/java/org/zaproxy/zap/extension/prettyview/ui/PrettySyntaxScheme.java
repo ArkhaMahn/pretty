@@ -70,7 +70,8 @@ final class PrettySyntaxScheme {
     scheme.setStyle(27, style(text, font));
     scheme.setStyle(28, style(string, font));
     scheme.setStyle(29, style(comment, font));
-    scheme.setStyle(30, style(preprocessor, font));
+    // 30 is the doctype, which Burp paints as a comment.
+    scheme.setStyle(30, style(comment, font));
     scheme.setStyle(31, style(preprocessor, font));
     scheme.setStyle(32, style(cdata, font));
     scheme.setStyle(33, style(cdata, font));
