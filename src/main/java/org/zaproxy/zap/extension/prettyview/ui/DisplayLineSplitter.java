@@ -66,6 +66,23 @@ final class DisplayLineSplitter {
   }
 
   /**
+   * Breaks the text for the editor, or hands it over untouched when it will be wrapped.
+   *
+   * <p>A wrapped editor lays its own rows at the view width without numbering them, so breaking
+   * here would number what wrapping must not: an over-long line counts as the single line it
+   * is. Only an unwrapped editor is given breaks, because a row tens of thousands of characters
+   * wide asks for a preferred width of hundreds of thousands of pixels and paints only part of
+   * itself.
+   */
+  static Split split(String text, boolean wrap) {
+    if (wrap) {
+      String whole = text == null ? "" : text;
+      return new Split(whole, whole, new int[0], new int[0]);
+    }
+    return DisplayLineSplitter.split(text);
+  }
+
+  /**
    * Breaks only monster lines before they reach the editor. Short lines reach it untouched, so
    * what is shown is the formatted text byte for byte and code folding sees the real structure;
    * only the pathological few lines are cut, each continuation replaying the broken line's

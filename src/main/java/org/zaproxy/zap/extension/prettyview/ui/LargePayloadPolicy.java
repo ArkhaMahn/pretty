@@ -93,11 +93,13 @@ public final class LargePayloadPolicy {
     return lines;
   }
 
-  public static String syntaxStyleFor(String text, PayloadFormat format) {
+  public static String syntaxStyleFor(String text, PayloadFormat format, boolean wrap) {
     if (text != null && text.length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
+    // While wrapped, over-long lines are laid out as soft rows from cached tokens instead of
+    // re-measured whole, so the guard stands down and the highlighting stays on.
+    if (!wrap && LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
@@ -111,13 +113,14 @@ public final class LargePayloadPolicy {
    * characters plus the seams {@link DisplayLineSplitter} added, and a payload sitting within a few
    * hundred characters of the limit would cross it on seams alone and lose its highlighting for no reason.
    * The line limit is about what the editor has to tokenize, so it is asked of the displayed text, which
-   * is the only text the editor ever holds.
+   * is the only text the editor ever holds - except while wrapped, when the display text is the
+   * formatted text untouched and over-long lines still highlight (see above).
    */
-  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format) {
+  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format, boolean wrap) {
     if (split.originalText().length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
+    if (!wrap && LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
