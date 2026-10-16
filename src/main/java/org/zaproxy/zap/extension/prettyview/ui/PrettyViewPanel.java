@@ -171,12 +171,13 @@ extends JPanel {
   }
 
   /**
-   * Makes the wheel and the arrow keys move the view by a line rather than by a handful of pixels.
+   * Makes the wheel move the view in small steps rather than whole lines at a time.
    *
-   * <p>Swing's default unit increment comes from the view, and on a text area that can be a few pixels,
-   * which reads as scrolling that barely moves however hard the wheel is turned. Asking for a whole row
-   * per unit, and for FlatLaf's smooth scrolling on top when ZAP is running its own look and feel, makes
-   * the same physical gesture move a predictable amount of text.
+   * <p>Swing's default unit increment comes from the view, and on a text area that can be a few
+   * pixels, which reads as scrolling that barely moves however hard the wheel is turned - while
+   * a whole line per notch jumps even under FlatLaf's smooth scrolling, which is also asked for
+   * here when ZAP runs its own look and feel. A third of a row glides instead, at the same paint
+   * cost per notch either way.
    */
   private void installScrolling() {
     this.scrollPane.putClientProperty("JScrollPane.smoothScrolling", Boolean.TRUE);
@@ -190,7 +191,9 @@ extends JPanel {
   }
 
   private void applyScrollUnit() {
-    int unit = Math.max(8, this.textArea.getLineHeight());
+    // Sub-line steps so a wheel notch glides instead of jumping a whole line at a time; the
+    // floor keeps the gesture meaningful however small the font runs.
+    int unit = Math.max(8, this.textArea.getLineHeight() / 3);
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null) {
       vertical.setUnitIncrement(unit);

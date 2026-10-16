@@ -37,6 +37,13 @@ final class DisplayLineSplitter {
   static final int CHUNK_CHARS = 2000;
 
   /**
+   * Longest indentation a continuation line inherits from the line it was broken off. A crowded
+   * continuation still reads as part of its line well past this, while an uncapped one would copy
+   * a pathological indent onto every chunk.
+   */
+  static final int MAX_BREAK_INDENT = 64;
+
+  /**
    * How far a break may be held off while the character at the boundary is inside a string: a string
    * crossing a chunk boundary is kept whole up to this length, and only a longer one is split. Both
    * lengths keep the line well inside the point where laying one out costs a frame.
@@ -52,9 +59,10 @@ final class DisplayLineSplitter {
 
   static Split split(String text) {
     if (text == null || text.isEmpty()) {
-      return new Split(text == null ? "" : text, text == null ? "" : text, new int[0]);
+      return new Split(text == null ? "" : text, text == null ? "" : text, new int[0], new int[0]);
     }
     List<Integer> breaks = new ArrayList<>();
+    List<Integer> indents = new ArrayList<>();
     StringBuilder out = new StringBuilder(text.length() + 1024);
     int lineStart = 0;
     for (int i = 0; i < text.length(); ++i) {
@@ -62,7 +70,8 @@ final class DisplayLineSplitter {
         continue;
       }
       int lineEnd = i;
-      copyChunked(text, lineStart, lineEnd, out, breaks);
+      copyChunked(text, lineStart, lineEnd, breakIndent(text, lineStart, lineEnd), out, breaks,
+          indents);
       out.append(text.charAt(i));
       lineStart = i + 1;
       if (text.charAt(i) == '\r' && lineStart < text.length() && text.charAt(i + 1) == '\n') {
@@ -70,12 +79,32 @@ final class DisplayLineSplitter {
         ++lineStart;
       }
     }
-    copyChunked(text, lineStart, text.length(), out, breaks);
-    return new Split(out.toString(), text, toIntArray(breaks));
+    copyChunked(text, lineStart, text.length(), breakIndent(text, lineStart, text.length()), out,
+        breaks, indents);
+    return new Split(out.toString(), text, toIntArray(breaks), toIntArray(indents));
+  }
+
+  /**
+   * The whitespace a broken line starts with, replayed in front of every continuation chunk so
+   * the pieces still read as one indented line. Only blanks count, and only up to {@link
+   * #MAX_BREAK_INDENT} of them.
+   */
+  private static String breakIndent(String text, int from, int to) {
+    int end = from;
+    int cap = Math.min(to, from + MAX_BREAK_INDENT);
+    while (end < cap) {
+      char c = text.charAt(end);
+      if (c != ' ' && c != '\t') {
+        break;
+      }
+      ++end;
+    }
+    return end > from ? text.substring(from, end) : "";
   }
 
   private static void copyChunked(
-      String text, int from, int to, StringBuilder out, List<Integer> breaks) {
+      String text, int from, int to, String indent, StringBuilder out, List<Integer> breaks,
+      List<Integer> indents) {
     int length = to - from;
     if (length <= SPLIT_LINE_CHARS) {
       if (length > 0) {
@@ -89,7 +118,7 @@ final class DisplayLineSplitter {
     int i = from;
     while (i < to) {
       if (quote == 0 ? i - chunkStart >= CHUNK_CHARS : i - chunkStart >= MAX_CHUNK_CHARS) {
-        chunkStart = emitBreak(text, chunkStart, i, out, breaks);
+        chunkStart = emitBreak(text, chunkStart, i, indent, out, breaks, indents);
       }
       char c = text.charAt(i);
       if (comment == LINE_COMMENT) {
@@ -138,13 +167,18 @@ final class DisplayLineSplitter {
 
   /**
    * Copies the chunk that ends at {@code at} and records the break the editor is given, returning the
-   * offset the next chunk starts from.
+   * offset the next chunk starts from. The continuation replays the broken line's indentation, so
+   * the pieces still read as one line; the replayed blanks are recorded beside the break so the
+   * mapping back skips them like the break itself.
    */
   private static int emitBreak(
-      String text, int chunkStart, int at, StringBuilder out, List<Integer> breaks) {
+      String text, int chunkStart, int at, String indent, StringBuilder out,
+      List<Integer> breaks, List<Integer> indents) {
     out.append(text, chunkStart, at);
     breaks.add(out.length());
+    indents.add(indent.length());
     out.append('\n');
+    out.append(indent);
     return at;
   }
 
@@ -161,11 +195,14 @@ final class DisplayLineSplitter {
     private final String displayText;
     private final String originalText;
     private final int[] breakOffsets;
+    /** Replayed indentation after each break, in characters; parallel to {@link #breakOffsets}. */
+    private final int[] breakIndents;
 
-    Split(String displayText, String originalText, int[] breakOffsets) {
+    Split(String displayText, String originalText, int[] breakOffsets, int[] breakIndents) {
       this.displayText = displayText;
       this.originalText = originalText;
       this.breakOffsets = breakOffsets;
+      this.breakIndents = breakIndents;
     }
 
     String displayText() {
@@ -191,18 +228,23 @@ final class DisplayLineSplitter {
     /**
      * Maps an offset in the display text to the matching offset in the formatted text.
      *
-     * <p>An offset that sits on an inserted break maps to the position the break was put in front of, which
-     * is what a selection boundary wants: selecting across a break copies the characters on both sides of
-     * it and none of the break itself.
+     * <p>An offset that sits on an inserted break - the newline or the replayed indentation after
+     * it - maps to the position the break was put in front of, which is what a selection boundary
+     * wants: selecting across a break copies the characters on both sides of it and none of the
+     * break itself.
      */
     int toOriginalOffset(int displayOffset) {
       int removed = 0;
-      for (int offset : this.breakOffsets) {
-        if (offset < displayOffset) {
-          ++removed;
-        } else {
+      for (int i = 0; i < this.breakOffsets.length; ++i) {
+        int offset = this.breakOffsets[i];
+        if (displayOffset <= offset) {
           break;
         }
+        int runEnd = offset + 1 + this.breakIndents[i];
+        if (displayOffset < runEnd) {
+          return offset - removed;
+        }
+        removed += 1 + this.breakIndents[i];
       }
       return displayOffset - removed;
     }
@@ -211,17 +253,19 @@ final class DisplayLineSplitter {
      * Maps an offset in the formatted text to the matching offset in the display text.
      *
      * <p>The inverse of {@link #toOriginalOffset}: every inserted break at or before the offset
-     * shifts it one character forward. Break {@code i} sits before formatted character
-     * {@code b[i] - i}, so breaks are counted while that holds.
+     * shifts it forward past the newline and the replayed indentation. Break {@code i} sits
+     * before formatted character {@code b[i] - inserted}, where {@code inserted} is everything
+     * earlier breaks added, so breaks are counted while that holds.
      */
     int toDisplayOffset(int formattedOffset) {
       int clamped = Math.max(0, Math.min(formattedOffset, this.originalText.length()));
       int display = clamped;
-      int seen = 0;
-      for (int offset : this.breakOffsets) {
-        if (offset - seen <= clamped) {
-          ++display;
-          ++seen;
+      int inserted = 0;
+      for (int i = 0; i < this.breakOffsets.length; ++i) {
+        if (this.breakOffsets[i] - inserted <= clamped) {
+          int run = 1 + this.breakIndents[i];
+          display += run;
+          inserted += run;
         } else {
           break;
         }
@@ -291,8 +335,10 @@ final class DisplayLineSplitter {
               == candidate.charAt(candidate.length() - 1 - suffix)) {
         ++suffix;
       }
-      for (int offset : this.breakOffsets) {
-        if (offset >= prefix && offset < display.length() - suffix) {
+      int regionEnd = display.length() - suffix;
+      for (int i = 0; i < this.breakOffsets.length; ++i) {
+        int runEnd = this.breakOffsets[i] + 1 + this.breakIndents[i];
+        if (this.breakOffsets[i] < regionEnd && runEnd > prefix) {
           return candidate;
         }
       }
