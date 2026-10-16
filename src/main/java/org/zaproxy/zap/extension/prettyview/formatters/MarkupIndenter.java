@@ -428,9 +428,20 @@ final class MarkupIndenter {
           }
           break;
         case OPEN:
-          if (token.selfClosing
-              || voidElements.contains(token.name)
-              || !token.name.isEmpty() && inlineElements.contains(token.name)) {
+          if (!token.name.isEmpty() && inlineElements.contains(token.name)) {
+            flow.appendFlow(token.raw);
+            break;
+          }
+          if (voidElements.contains(token.name)) {
+            // A void element outside the inline set (link, meta, ...) carries no phrasing
+            // content, so it lays out as a block on its own line instead of gluing to whatever
+            // inline flow is open (a head of stylesheet links would otherwise read as one long
+            // line). Inline-set voids flowed above and are untouched.
+            flow.flush();
+            flow.ownLine(token.raw);
+            break;
+          }
+          if (token.selfClosing) {
             flow.appendFlow(token.raw);
             break;
           }
@@ -503,9 +514,9 @@ final class MarkupIndenter {
 
   /**
    * Index of the close tag completing a block whose whole content is inline (text, inline tags,
-   * void tags, single-line comments), so the element stays on one line, or -1 when the content
-   * holds a nested block, raw content, a multi-line run, or no matching close at all. Only
-   * single-line runs collapse: joining across a newline would delete it.
+   * inline voids, single-line comments), so the element stays on one line, or -1 when the content
+   * holds a nested block, a block-level void, raw content, a multi-line run, or no matching close
+   * at all. Only single-line runs collapse: joining across a newline would delete it.
    */
   private static int collapsibleClose(
       List<Token> tokens, int openAt, Set<String> voidElements, Set<String> inlineElements) {
@@ -526,15 +537,15 @@ final class MarkupIndenter {
           total += current.raw.length();
           break;
         case OPEN:
-          if (current.selfClosing
-              || voidElements.contains(current.name)
-              || !current.name.isEmpty() && inlineElements.contains(current.name)) {
+          if (!current.name.isEmpty() && inlineElements.contains(current.name)
+              || current.selfClosing && !voidElements.contains(current.name)) {
             if (current.raw.indexOf('\n') >= 0) {
               return -1;
             }
             total += current.raw.length();
             break;
           }
+          // A block-level void inside means the span is not inline-only after all.
           return -1;
         case CLOSE:
           if (!current.name.isEmpty() && inlineElements.contains(current.name)) {
