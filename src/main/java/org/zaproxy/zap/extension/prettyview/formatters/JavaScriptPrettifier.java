@@ -498,6 +498,21 @@ implements PrettyPrettifier {
       if (this.line.length() == 0) {
         return;
       }
+      // Source indentation dies here: the level below supplies the indent, so keeping it would
+      // indent pretty output again on a second pass and the layout could never settle. Only the
+      // line start is stripped - interior spacing is the writer's own canonical single spaces -
+      // and emission points only ever fire on code structure, never inside a template literal or
+      // comment, so significant leading content cannot be sitting here.
+      int start = 0;
+      while (start < this.line.length() && Character.isWhitespace(this.line.charAt(start))) {
+        ++start;
+      }
+      if (start > 0) {
+        this.line.delete(0, start);
+      }
+      if (this.line.length() == 0) {
+        return;
+      }
       int drawn = Math.min(this.indent, PrettyPrettifier.MAX_INDENT_DEPTH);
       for (int i = 0; i < drawn; ++i) {
         this.out.append(PrettyPrettifier.INDENT);

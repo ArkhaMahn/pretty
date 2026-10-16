@@ -290,15 +290,23 @@ final class MarkupIndenter {
         return;
       }
       if (this.cur == null) {
-        // Whitespace between blocks carries no content; inside a line it separates words.
-        if (segment.trim().isEmpty()) {
+        // Whitespace between blocks carries no content; inside a line it separates words. At a
+        // line start the indentation comes from the level, so source indentation is stripped -
+        // without this a second pass over pretty output would indent the first pass's own
+        // indentation again, and the layout could never settle.
+        int start = 0;
+        while (start < segment.length() && Character.isWhitespace(segment.charAt(start))) {
+          ++start;
+        }
+        if (start >= segment.length()) {
           return;
         }
-        this.cur = new StringBuilder(this.indentOf()).append(segment);
+        this.cur = new StringBuilder(this.indentOf()).append(segment, start, segment.length());
+        this.length += this.indentOf().length() + segment.length() - start;
       } else {
         this.cur.append(segment);
+        this.length += segment.length();
       }
-      this.length += segment.length();
     }
 
     void flush() {
@@ -340,16 +348,25 @@ final class MarkupIndenter {
       String[] segments = text.split("\n", -1);
       this.appendFlow(segments[0]);
       for (int i = 1; i < segments.length; ++i) {
+        // Source indentation dies with its newline: the level re-indents continuation lines, so
+        // keeping it would double-indent pretty output on a second pass. appendFlow strips the
+        // line-start case; the strip here covers continuations, which never open the line.
+        String segment = segments[i];
+        int start = 0;
+        while (start < segment.length() && Character.isWhitespace(segment.charAt(start))) {
+          ++start;
+        }
+        String stripped = start >= segment.length() ? "" : segment.substring(start);
         this.flush();
         if (i == segments.length - 1) {
-          if (!segments[i].isEmpty()) {
-            this.cur = new StringBuilder(this.indentOf()).append(segments[i]);
-            this.length += this.indentOf().length() + segments[i].length();
+          if (!stripped.isEmpty()) {
+            this.cur = new StringBuilder(this.indentOf()).append(stripped);
+            this.length += this.indentOf().length() + stripped.length();
           }
-        } else if (segments[i].isEmpty()) {
-          this.lines.add(segments[i]);
+        } else if (stripped.isEmpty()) {
+          this.lines.add(stripped);
         } else {
-          String indented = this.indentOf() + segments[i];
+          String indented = this.indentOf() + stripped;
           this.lines.add(indented);
           this.length += indented.length();
         }
