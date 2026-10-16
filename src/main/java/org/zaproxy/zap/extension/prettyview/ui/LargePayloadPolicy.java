@@ -55,25 +55,29 @@ public final class LargePayloadPolicy {
   }
 
   /**
-   * Whether the display text is wrapped: the toggle says yes by default, but past {@link
+   * Whether the formatted text is wrapped: the toggle says yes by default, but past {@link
    * #MAX_WRAP_LINES} lines an untouched toggle is overruled for scroll performance. See {@link
    * PrettyLineWrap}.
+   *
+   * <p>Answered on the formatted text, before any breaks are added: the decision travels with
+   * the text into the split and the editor, and is never re-derived from break-inflated display
+   * text, which would flip wrapping off on the views that need it on.
    */
-  public static boolean shouldWrap(String displayText) {
+  public static boolean shouldWrap(String formattedText) {
     if (!PrettyLineWrap.isEnabled()) {
       return false;
     }
-    return PrettyLineWrap.isTouched() || LargePayloadPolicy.countLines(displayText) <= MAX_WRAP_LINES;
+    return PrettyLineWrap.isTouched() || LargePayloadPolicy.countLines(formattedText) <= MAX_WRAP_LINES;
   }
 
   /**
-   * Whether the display text was unwrapped by the line limit rather than by choice, for the
+   * Whether the formatted text was unwrapped by the line limit rather than by choice, for the
    * notice that says so.
    */
-  public static boolean wasAutoUnwrapped(String displayText) {
+  public static boolean wasAutoUnwrapped(String formattedText) {
     return PrettyLineWrap.isEnabled()
         && !PrettyLineWrap.isTouched()
-        && LargePayloadPolicy.countLines(displayText) > MAX_WRAP_LINES;
+        && LargePayloadPolicy.countLines(formattedText) > MAX_WRAP_LINES;
   }
 
   static int countLines(String text) {
@@ -89,11 +93,11 @@ public final class LargePayloadPolicy {
     return lines;
   }
 
-  public static String syntaxStyleFor(String text, PayloadFormat format) {
+  public static String syntaxStyleFor(String text, PayloadFormat format, boolean wrap) {
     if (text != null && text.length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
+    if (!wrap && LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
@@ -107,13 +111,15 @@ public final class LargePayloadPolicy {
    * characters plus the seams {@link DisplayLineSplitter} added, and a payload sitting within a few
    * hundred characters of the limit would cross it on seams alone and lose its highlighting for no reason.
    * The line limit is about what the editor has to tokenize, so it is asked of the displayed text, which
-   * is the only text the editor ever holds.
+   * is the only text the editor ever holds - except while wrapped, when over-long lines are laid out as
+   * soft rows from cached tokens instead of re-measured whole, so the guard stands down and the
+   * highlighting stays on.
    */
-  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format) {
+  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format, boolean wrap) {
     if (split.originalText().length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
+    if (!wrap && LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
@@ -141,27 +147,14 @@ public final class LargePayloadPolicy {
    *
    * <p>Lines wrap in the editor instead of scrolling sideways, and folding is disabled while
    * they do: a fold gutter cannot share its lines with wrapped rows, so Burp drops folding the
-   * moment wrapping goes on, and this does the same. Monster lines never reach the editor
-   * unwrapped - {@link DisplayLineSplitter} breaks those first - so no row is wide enough to
-   * mispaint either way.
+   * moment wrapping goes on, and this does the same. The wrap decision travelled here with the
+   * split it was made for and is applied as decided, never re-derived.
    */
-  public static void applyForSize(RSyntaxTextArea area, String text) {
+  static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split, boolean wrap) {
     // Folding follows the wrap flag inside the area itself; see PrettyTextArea.setLineWrap.
-    area.setLineWrap(LargePayloadPolicy.shouldWrap(text));
+    area.setLineWrap(wrap);
     // Burp's wrapper asks its editor for the same preference: break wrapped rows on word
     // boundaries rather than mid-word.
-    area.setWrapStyleWord(true);
-    area.setAntiAliasingEnabled(true);
-  }
-
-  /**
-   * The editor settings for a payload that is about to be displayed as {@code split}.
-   *
-   * <p>Same as {@link #applyForSize(RSyntaxTextArea, String)}: the split only ever shortens monster
-   * lines, so the wrap setting is judged on text the editor can lay out either way.
-   */
-  static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split) {
-    area.setLineWrap(LargePayloadPolicy.shouldWrap(split.displayText()));
     area.setWrapStyleWord(true);
     area.setAntiAliasingEnabled(true);
   }

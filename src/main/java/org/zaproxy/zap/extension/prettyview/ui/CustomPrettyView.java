@@ -156,28 +156,35 @@ SearchableHttpPanelView {
       }
       this.panel.clearNotice();
       this.headerLength = 0;
+      boolean wrap = LargePayloadPolicy.shouldWrap("");
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
-          DisplayLineSplitter.split(""),
-          ChunkedTextLoader.buildDocument("", "text/plain", 0, () -> ticket == this.generation.get()));
+          DisplayLineSplitter.split("", wrap),
+          ChunkedTextLoader.buildDocument("", "text/plain", 0, () -> ticket == this.generation.get()),
+          wrap);
     });
   }
 
   private void applyOnEdt(int ticket, PrettyResult result) {
+    // The wrap decision is made once on the formatted text and travels with it: the split
+    // breaks monster lines only when unwrapped, and the editor applies the same flag, so a
+    // wrapped view numbers exactly the formatted lines and an unwrapped one stays paintable.
+    boolean wrap = LargePayloadPolicy.shouldWrap(result.getText());
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), wrap);
       this.applyIfCurrent(ticket, result, split,
           ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
-              this.headerEndDisplay(split), () -> ticket == this.generation.get()));
+              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat(), wrap),
+              this.headerEndDisplay(split), () -> ticket == this.generation.get()),
+          wrap);
     } else {
       // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
       // both run here on the worker thread so the EDT only installs the result. A stale ticket
       // abandons the build at the next slice boundary, and applyIfCurrent drops whatever is left.
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
-      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), wrap);
+      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat(), wrap);
       RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
           this.headerEndDisplay(split), () -> ticket == this.generation.get());
-      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document));
+      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document, wrap));
     }
   }
 
@@ -192,29 +199,32 @@ SearchableHttpPanelView {
   }
 
   private void applyIfCurrent(
-      int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document) {
+      int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document,
+      boolean wrap) {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
     this.format = result.getFormat();
-    if (LargePayloadPolicy.wasAutoUnwrapped(split.displayText())) {
+    // The notice answers the wrap decision, which was made on the formatted text: counting the
+    // display text instead would count the split's own breaks and cry unwrap on wrapped views.
+    if (LargePayloadPolicy.wasAutoUnwrapped(result.getText())) {
       this.updateNotice(result, "Unwrapped "
-          + LargePayloadPolicy.countLines(split.displayText())
+          + LargePayloadPolicy.countLines(result.getText())
           + " lines for smooth scrolling; Line wrapping in the View menu forces wrapping.");
     } else {
       this.updateNotice(result);
     }
-    this.installSplit(ticket, split, document);
+    this.installSplit(ticket, split, document, wrap);
   }
 
-  /** Installs a built document into the editor. */
-  private void installSplit(int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document) {
+  /** Installs a built document into the editor. The wrap decision travels with the split
+   * it was made for: re-deciding on the display text here would count the split's own breaks
+   * and flip wrapping off on the views that need it on. */
+  private void installSplit(
+      int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document, boolean wrap) {
     this.split = split;
     this.panel.setSplit(split);
-    // The editor is given the split text and so is judged on the split text. Deciding from the formatted
-    // text instead would read a 54 331-char line off a document that no longer holds one, and would strip
-    // the highlighting off a payload whose every line now fits in a screenful.
-    LargePayloadPolicy.applyForSize(this.textArea, split);
+    LargePayloadPolicy.applyForSize(this.textArea, split, wrap);
     this.loading = true;
     JTextArea body = this.panel.getTextArea();
     body.setEditable(false);
@@ -299,7 +309,7 @@ SearchableHttpPanelView {
       body = parts.getBody();
     }
     PayloadFormat format = this.prettifierManager.detectFormat(this.model.getContentType(), body);
-    String style = LargePayloadPolicy.syntaxStyleFor(display, format);
+    String style = LargePayloadPolicy.syntaxStyleFor(display, format, edit.getLineWrap());
     if (ticket != this.generation.get()) {
       return;
     }

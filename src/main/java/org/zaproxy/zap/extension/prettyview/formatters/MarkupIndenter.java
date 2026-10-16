@@ -592,7 +592,9 @@ final class MarkupIndenter {
       throws PrettificationException {
     String content = token.raw;
     BlockFormatter formatter = blockFormatters.get(token.name);
-    if (formatter != null && !content.trim().isEmpty()) {
+    if (formatter != null
+        && !content.trim().isEmpty()
+        && !PrettyPrettifier.isMinified(content)) {
       try {
         content = formatter.format(content);
         // The sub-formatters frame their output with a trailing newline of their own; drop it

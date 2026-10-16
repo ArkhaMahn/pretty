@@ -30,6 +30,11 @@ implements PrettyPrettifier {
     if (body == null || body.isEmpty()) {
       return "";
     }
+    // Minified bundles stay verbatim - highlighted but never reformatted - so they count as
+    // the lines they have rather than the thousands formatting would unfold them into.
+    if (PrettyPrettifier.isMinified(body)) {
+      throw new PrettificationException("Minified JavaScript goes back verbatim.");
+    }
     Writer writer = new Writer(body.length());
     State state = State.CODE;
     int parenDepth = 0;

@@ -12,6 +12,11 @@ implements PrettyPrettifier {
     if (body == null || body.trim().isEmpty()) {
       return body == null ? "" : body;
     }
+    // Minified bundles stay verbatim - highlighted but never reformatted - so they count as
+    // the lines they have rather than the thousands formatting would unfold them into.
+    if (PrettyPrettifier.isMinified(body)) {
+      throw new PrettificationException("Minified CSS goes back verbatim.");
+    }
     return new Writer(body.length()).run(body);
   }
 

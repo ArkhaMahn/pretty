@@ -28,6 +28,38 @@ public interface PrettyPrettifier {
    */
   int MAX_INDENT_DEPTH = 64;
 
+  /**
+   * A body longer than this, holding a line longer than {@link #MINIFIED_LINE_CHARS}, is
+   * minified: it stays verbatim instead of formatted, so a minified bundle counts as the lines
+   * it has rather than the thousands formatting would unfold it into. Shorter bodies always
+   * format.
+   */
+  int MINIFIED_TEXT_CHARS = 32768;
+  /** Longest line that still formats inside a minified-sized body; past it the body is minified. */
+  int MINIFIED_LINE_CHARS = 8000;
+
+  /**
+   * Whether {@code body} is minified: long overall with an over-long line in it. Minified
+   * bundles are highlighted but never reformatted.
+   */
+  static boolean isMinified(String body) {
+    if (body == null || body.length() < MINIFIED_TEXT_CHARS) {
+      return false;
+    }
+    int start = 0;
+    for (int i = 0; i < body.length(); ++i) {
+      char c = body.charAt(i);
+      if (c != '\n' && c != '\r') {
+        continue;
+      }
+      if (i - start > MINIFIED_LINE_CHARS) {
+        return true;
+      }
+      start = i + 1;
+    }
+    return body.length() - start > MINIFIED_LINE_CHARS;
+  }
+
   public SupportedFormat getSupportedFormat();
 
   public String prettify(String var1) throws PrettificationException;
