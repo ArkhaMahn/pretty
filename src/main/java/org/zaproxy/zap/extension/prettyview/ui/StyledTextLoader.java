@@ -51,7 +51,9 @@ final class StyledTextLoader {
     }
     try {
       StyledHighlighter highlighter = StyledHighlighter.styles(palette);
-      highlighter.highlight(document, format, fromLine);
+      if (!highlighter.highlight(document, format, fromLine, stillWanted)) {
+        return null;
+      }
     } catch (RuntimeException | BadLocationException e) {
       return null;
     }

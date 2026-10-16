@@ -304,7 +304,7 @@ SearchableHttpPanelView {
     javax.swing.text.DefaultStyledDocument styled = (javax.swing.text.DefaultStyledDocument) document;
     document.removeUndoableEditListener(edit.undoHistory());
     try {
-      StyledHighlighter.styles(EditorTheme.palette()).highlight(styled, format, 0);
+      StyledHighlighter.styles(EditorTheme.palette()).highlight(styled, format, 0, () -> true);
     } catch (RuntimeException | BadLocationException e) {
       // Never break typing for highlighting; the next pause repaints.
     } finally {

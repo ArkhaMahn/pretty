@@ -105,13 +105,18 @@ final class StyledHighlighter {
    * Paints the document for {@code format} from line {@code fromLine} (0-based), scanning the
    * lines above only for carry state. Header lines keep the default colour; only the body
    * highlights. Linear in the document size; callers run it off the EDT for large payloads
-   * and suppress undo around it.
+   * and suppress undo around it. Returns false when {@code stillWanted} went false partway,
+   * in which case the document is half-painted and the caller drops it.
    */
-  void highlight(DefaultStyledDocument document, PayloadFormat format, int fromLine)
+  boolean highlight(DefaultStyledDocument document, PayloadFormat format, int fromLine,
+      java.util.function.BooleanSupplier stillWanted)
       throws BadLocationException {
     Element root = document.getDefaultRootElement();
     State state = new State();
     for (int line = 0; line < root.getElementCount(); ++line) {
+      if ((line & 255) == 0 && !stillWanted.getAsBoolean()) {
+        return false;
+      }
       Element element = root.getElement(line);
       int start = element.getStartOffset();
       int end = Math.min(element.getEndOffset(), document.getLength());
@@ -126,6 +131,7 @@ final class StyledHighlighter {
         this.paintLine(document, start, text, format, state);
       }
     }
+    return stillWanted.getAsBoolean();
   }
 
   /**
