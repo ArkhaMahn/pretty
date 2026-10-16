@@ -9,9 +9,16 @@ import java.util.regex.Pattern;
 import javax.swing.JComponent;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.text.AbstractDocument;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.Document;
 import java.awt.*;
 import org.apache.commons.configuration.FileConfiguration;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.TokenMakerFactory;
@@ -33,7 +40,10 @@ public class CustomPrettyView
 implements HttpPanelView,
 HttpPanelViewModelListener,
 SearchableHttpPanelView {
+  private static final Logger LOGGER = LogManager.getLogger(CustomPrettyView.class);
   private static final int POSITION = 2;
+  /** Pause after the last keystroke before an editable view reformats what was typed. */
+  private static final int LIVE_FORMAT_DELAY_MS = 400;
   private final String name;
   private final String captionName;
   private final boolean request;
@@ -43,6 +53,13 @@ SearchableHttpPanelView {
   private final UniversalPrettifierManager prettifierManager;
   private final PrettyWorker worker;
   private final AtomicInteger generation = new AtomicInteger();
+  /**
+   * Reformats a pause in typing, so editable views prettify live the way Burp's do. One-shot:
+   * every keystroke restarts it, and it never fires while a load is in flight.
+   */
+  private final Timer liveTimer;
+  /** While set, document mutations are the live formatter's own and must not re-arm it. */
+  private boolean liveFormatting;
   private boolean loading;
   /** Whether the host panel allows editing; mirrors the core request/response panels. */
   private boolean editable;
@@ -88,6 +105,8 @@ SearchableHttpPanelView {
     this.editable = false;
     this.prettifierManager = new UniversalPrettifierManager();
     this.worker = new PrettyWorker();
+    this.liveTimer = new Timer(LIVE_FORMAT_DELAY_MS, event -> this.runLiveFormat());
+    this.liveTimer.setRepeats(false);
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
     this.textArea = this.createTextArea();
     this.panel = new PrettyViewPanel(this.textArea, this.model);
@@ -212,13 +231,147 @@ SearchableHttpPanelView {
       this.loading = false;
       this.panel.setEditable(this.allowsEdits());
       this.panel.endLoad();
+      this.armLiveFormat(body);
     });
+  }
+
+  /**
+   * Watches the freshly installed document for typing pauses. The listener dies with the
+   * document it is attached to, so replacing the document on the next load needs no cleanup;
+   * stopping the timer covers the pause between loads.
+   */
+  private void armLiveFormat(JTextArea body) {
+    this.liveTimer.stop();
+    if (!(body instanceof RSyntaxTextArea)) {
+      return;
+    }
+    body.getDocument().addDocumentListener(new DocumentListener() {
+      @Override
+      public void insertUpdate(DocumentEvent event) {
+        CustomPrettyView.this.scheduleLiveFormat();
+      }
+
+      @Override
+      public void removeUpdate(DocumentEvent event) {
+        CustomPrettyView.this.scheduleLiveFormat();
+      }
+
+      @Override
+      public void changedUpdate(DocumentEvent event) {
+      }
+    });
+  }
+
+  /** Restarts the typing-pause timer, unless this view is read-only or busy. */
+  private void scheduleLiveFormat() {
+    if (this.loading || this.liveFormatting || !this.allowsEdits()) {
+      return;
+    }
+    this.liveTimer.restart();
+  }
+
+  /**
+   * Reformats what was typed since the pause began, in place: the document is edited rather
+   * than replaced, so the reformat itself is a single undo step and the caret is mapped through
+   * the change instead of jumping. Malformed input reformats to itself and is left untouched,
+   * and a load that landed meanwhile aborts the run.
+   */
+  private void runLiveFormat() {
+    if (this.loading || this.liveFormatting || !this.allowsEdits() || this.headerOnly) {
+      return;
+    }
+    int ticket = this.generation.get();
+    JTextArea area = this.panel.getTextArea();
+    String display = area.getText();
+    String formatted = this.split == null ? display : this.split.toOriginal(display);
+    PrettyResult result;
+    if (this.bodyOnly) {
+      result = this.prettifierManager.prettifyBodyMessage(formatted, this.model.getContentType());
+    } else {
+      result = this.prettifierManager.prettifyMessage(formatted, this.model.getContentType());
+    }
+    if (ticket != this.generation.get()) {
+      return;
+    }
+    String newFormatted = result.getText();
+    if (newFormatted.equals(formatted)) {
+      return;
+    }
+    DisplayLineSplitter.Split newSplit = DisplayLineSplitter.split(newFormatted);
+    String newDisplay = newSplit.displayText();
+    if (newDisplay.equals(display)) {
+      return;
+    }
+    int caret = CustomPrettyView.mapCaret(display, area.getCaretPosition(), newDisplay);
+    this.liveFormatting = true;
+    boolean atomic = area instanceof RSyntaxTextArea;
+    if (atomic) {
+      // One undo step for the whole reformat: without this the remove and the insert land as
+      // separate edits and undoing first blanks the editor instead of restoring what was typed.
+      ((RSyntaxTextArea) area).beginAtomicEdit();
+    }
+    try {
+      Document document = area.getDocument();
+      if (document instanceof AbstractDocument) {
+        ((AbstractDocument) document).replace(0, document.getLength(), newDisplay, null);
+      } else {
+        document.remove(0, document.getLength());
+        document.insertString(0, newDisplay, null);
+      }
+      area.setCaretPosition(Math.max(0, Math.min(caret, newDisplay.length())));
+      if (area instanceof RSyntaxTextArea) {
+        ((RSyntaxTextArea) area)
+            .setSyntaxEditingStyle(LargePayloadPolicy.syntaxStyleFor(newSplit, result.getFormat()));
+      }
+      this.split = newSplit;
+      this.format = result.getFormat();
+      this.lastFormatted = newDisplay;
+      if (!this.bodyOnly) {
+        MessageSplitter.Parts parts = MessageSplitter.split(newFormatted);
+        this.headerLength = parts.getHeaders().length();
+      }
+    } catch (BadLocationException e) {
+      LOGGER.debug("PrettyView live reformat skipped", e);
+    } finally {
+      if (atomic) {
+        ((RSyntaxTextArea) area).endAtomicEdit();
+      }
+      this.liveFormatting = false;
+    }
+  }
+
+  /**
+   * Maps a caret offset from the old display text onto the reformatted one: offsets inside the
+   * unchanged head or tail keep their meaning, and anything inside the rewritten middle keeps
+   * its relative position, clamped to the rewritten span.
+   */
+  static int mapCaret(String oldText, int caret, String newText) {
+    int current = Math.max(0, Math.min(caret, oldText.length()));
+    int maxPrefix = Math.min(oldText.length(), newText.length());
+    int prefix = 0;
+    while (prefix < maxPrefix && oldText.charAt(prefix) == newText.charAt(prefix)) {
+      ++prefix;
+    }
+    if (current <= prefix) {
+      return current;
+    }
+    int maxSuffix = Math.min(oldText.length() - prefix, newText.length() - prefix);
+    int suffix = 0;
+    while (suffix < maxSuffix
+        && oldText.charAt(oldText.length() - 1 - suffix)
+            == newText.charAt(newText.length() - 1 - suffix)) {
+      ++suffix;
+    }
+    if (current >= oldText.length() - suffix) {
+      return newText.length() - (oldText.length() - current);
+    }
+    int mapped = prefix + (current - prefix);
+    return Math.max(prefix, Math.min(mapped, newText.length() - suffix));
   }
 
   private void updateNotice(PrettyResult result) {
     this.updateNotice(result, null);
   }
-
   private void updateNotice(PrettyResult result, String extra) {
     StringBuilder message = new StringBuilder();
     if (extra != null && !extra.isEmpty()) {
@@ -508,6 +661,7 @@ SearchableHttpPanelView {
    */
   public void dispose() {
     this.generation.incrementAndGet();
+    this.liveTimer.stop();
     this.worker.shutdown();
     this.loading = false;
     this.panel.dispose();
