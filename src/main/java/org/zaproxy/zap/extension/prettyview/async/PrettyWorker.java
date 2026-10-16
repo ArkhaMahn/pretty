@@ -33,11 +33,25 @@ public final class PrettyWorker {
    * Queues one formatting task. Split (Header/Body) views hand over a bare body, which must go
    * through {@link UniversalPrettifierManager#prettifyBodyMessage}: the whole-message entry point
    * would file it as headers and report {@code PLAIN_TEXT}.
+   *
+   * <p>When {@code prettify} is false the text goes through verbatim and only its format is
+   * detected, for views where the user writes: what is shown - and saved, and sent - stays
+   * byte-for-byte theirs, with highlighting only.
    */
   public void submit(String message, String contentType, boolean bodyOnly, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
-    Supplier<PrettyResult> formatting = bodyOnly
-        ? () -> prettifierManager.prettifyBodyMessage(message, contentType)
-        : () -> prettifierManager.prettifyMessage(message, contentType);
+    this.submit(message, contentType, bodyOnly, true, prettifierManager, onResult);
+  }
+
+  public void submit(String message, String contentType, boolean bodyOnly, boolean prettify, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
+    Supplier<PrettyResult> formatting;
+    if (!prettify) {
+      formatting = () -> PrettyResult.formatted(message,
+          prettifierManager.detectFormat(contentType, PrettyWorker.bodyOf(message, bodyOnly)));
+    } else {
+      formatting = bodyOnly
+          ? () -> prettifierManager.prettifyBodyMessage(message, contentType)
+          : () -> prettifierManager.prettifyMessage(message, contentType);
+    }
     block3: {
       PrettyWorkerTask task = new PrettyWorkerTask(message, formatting, onResult);
       PrettyWorkerTask previous = this.current.getAndSet(task);
@@ -53,6 +67,13 @@ public final class PrettyWorker {
         return;
       }
     }
+  }
+
+  private static String bodyOf(String message, boolean bodyOnly) {
+    if (bodyOnly || message == null) {
+      return message == null ? "" : message;
+    }
+    return org.zaproxy.zap.extension.prettyview.detect.MessageSplitter.split(message).getBody();
   }
 
   private boolean onRejected(PrettyWorkerTask task) {

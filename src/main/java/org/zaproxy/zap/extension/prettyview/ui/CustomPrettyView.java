@@ -141,10 +141,12 @@ SearchableHttpPanelView {
       MessageSplitter.Parts parts = MessageSplitter.split(raw);
       this.headerLength = parts.getHeaders().length();
     }
-    // Editable views prettify exactly like read-only ones: what you see is laid out and
-    // highlighted, and save() maps it back to wire bytes (forms rejoin their pair lines).
+    // Editable views show the wire bytes verbatim and only highlight them: what is shown -
+    // and saved, and sent - stays byte-for-byte the user's, so a request never comes back from
+    // Send reformatted. Read-only views prettify.
+    boolean editable = this.isEditable();
     Consumer<PrettyResult> onResult = result -> this.applyOnEdt(ticket, (PrettyResult)result);
-    this.worker.submit(raw, contentType, this.bodyOnly, this.prettifierManager, onResult);
+    this.worker.submit(raw, contentType, this.bodyOnly, !editable, this.prettifierManager, onResult);
   }
 
   private void applyEmpty(int ticket) {
@@ -564,7 +566,7 @@ SearchableHttpPanelView {
   public void setEditable(boolean editable) {
     // Follow the host panel like every core view; see isEditable. When the effective mode
     // flips (e.g. a Break panel becoming editable around a trapped message), re-render so the
-    // editability matches; the display itself is prettified in both modes.
+    // mode matches: raw while editable, prettified while read-only.
     boolean wasEditable = this.isEditable();
     this.editable = editable;
     if (!this.loading) {
