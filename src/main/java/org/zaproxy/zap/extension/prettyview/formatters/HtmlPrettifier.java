@@ -81,7 +81,8 @@ implements PrettyPrettifier {
   @Override
   public String prettify(String body) throws PrettificationException {
     // In HTML parsing a self-closing slash never closes a raw-text element (<script/> still
-    // opens one), so the indenter is told to ignore it there.
+    // opens one), so the indenter is told to ignore it there. Tag soup stays lenient like the
+    // browsers: only XML demands balance.
     return MarkupIndenter.format(
         body,
         VOID_ELEMENTS,
@@ -89,6 +90,7 @@ implements PrettyPrettifier {
         VERBATIM_BLOCKS,
         this.blockFormatters,
         true,
-        MAX_ELEMENT_DEPTH);
+        MAX_ELEMENT_DEPTH,
+        false);
   }
 }

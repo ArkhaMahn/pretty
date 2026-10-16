@@ -55,14 +55,15 @@ final class MarkupIndenter {
       Set<String> verbatimBlocks,
       Map<String, BlockFormatter> blockFormatters,
       boolean rawIgnoresSelfClose,
-      int maxDepth)
+      int maxDepth,
+      boolean strict)
       throws PrettificationException {
     if (body == null || body.trim().isEmpty()) {
       throw new PrettificationException("Empty markup payload");
     }
     List<Token> tokens =
         MarkupIndenter.tokenize(body, verbatimBlocks, blockFormatters.keySet(), rawIgnoresSelfClose);
-    return MarkupIndenter.layout(tokens, voidElements, inlineElements, blockFormatters, maxDepth);
+    return MarkupIndenter.layout(tokens, voidElements, inlineElements, blockFormatters, maxDepth, strict);
   }
 
   /** A tag, a special block (comment, doctype, processing instruction), or a text run. */
@@ -373,9 +374,11 @@ final class MarkupIndenter {
       Set<String> voidElements,
       Set<String> inlineElements,
       Map<String, BlockFormatter> blockFormatters,
-      int maxDepth)
+      int maxDepth,
+      boolean strict)
       throws PrettificationException {
     Flow flow = new Flow();
+    java.util.Deque<String> openElements = strict ? new java.util.ArrayDeque<String>() : null;
     int size = tokens.size();
     for (int t = 0; t < size; ++t) {
       Token token = tokens.get(t);
@@ -388,9 +391,17 @@ final class MarkupIndenter {
           }
           break;
         case TEXT:
+          if (strict && openElements.isEmpty() && !token.raw.trim().isEmpty()) {
+            throw new PrettificationException("Text outside the root element; rendered verbatim");
+          }
           flow.flowText(token.raw);
           break;
         case CLOSE:
+          if (strict) {
+            if (openElements.isEmpty() || !openElements.pop().equals(token.name)) {
+              throw new PrettificationException("Mismatched close tag; rendered verbatim");
+            }
+          }
           if (!token.name.isEmpty() && inlineElements.contains(token.name)) {
             flow.appendFlow(token.raw);
           } else {
@@ -424,6 +435,9 @@ final class MarkupIndenter {
             t = inlineClose;
             break;
           }
+          if (strict && !token.name.isEmpty()) {
+            openElements.push(token.name);
+          }
           flow.flush();
           flow.ownLine(token.raw);
           ++flow.indent;
@@ -443,6 +457,9 @@ final class MarkupIndenter {
       if (flow.length > PrettyPrettifier.MAX_OUTPUT_CHARS) {
         throw new PrettificationException("Formatted output exceeded its size cap; rendered verbatim");
       }
+    }
+    if (strict && !openElements.isEmpty()) {
+      throw new PrettificationException("Unclosed element; rendered verbatim");
     }
     return flow.join();
   }
