@@ -9,6 +9,12 @@ import java.util.Set;
 public class JavaScriptPrettifier
 implements PrettyPrettifier {
   private static final int SOFT_WRAP_COLUMN = 180;
+  /**
+   * One level of JavaScript indentation. Four spaces rather than the shared two: webpack bundles
+   * nest modules inside wrappers inside objects, and the shallower unit collapses visually past
+   * three levels.
+   */
+  private static final String JS_INDENT = "    ";
   private static final Set<String> LOOP_KEYWORDS = new HashSet<String>(Arrays.asList("for", "while"));
   private static final Set<String> OBJECT_KEYWORDS = new HashSet<String>(Arrays.asList("return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "yield", "await", "case", "default"));
   /** Module clauses such as {@code import {a} from "m"} keep their braces on a single line. */
@@ -235,8 +241,16 @@ implements PrettyPrettifier {
     if (c != '{' && c != '}') {
       writer.append(c);
     }
-    if (c == ',' && writer.lineLength() > SOFT_WRAP_COLUMN) {
-      writer.newLine();
+    if (c == ',') {
+      if (writer.lineLength() > SOFT_WRAP_COLUMN || writer.isObjectMemberComma()) {
+        // Commas between object members always break, one pair per line, so minified modules
+        // like 47:{...},78:{...} unfold readably; everywhere else a comma breaks only past the
+        // width column, and short lists keep comma-space separators instead.
+        writer.newLine();
+      } else if (next != '\n' && next != '}' && next != ')' && next != ']'
+          && next != ',' && next != '\0' && !Character.isWhitespace(next)) {
+        writer.append(' ');
+      }
     }
     return State.CODE;
   }
@@ -320,6 +334,12 @@ implements PrettyPrettifier {
     private int caseIndent;
     /** One entry per open brace: {@link #BLOCK}, {@link #LITERAL} or {@link #CLAUSE}. */
     private int[] braceKinds = new int[16];
+    /**
+     * Bracket depth at the moment each brace opened. A member comma breaks only when no bracket
+     * opened inside its object since - so commas in {@code f(1,2)} and {@code [1,2]} never break,
+     * while members of an object wrapped in outer parens still do.
+     */
+    private int[] braceBrackets = new int[16];
     private int braceDepth;
     /** Depth of open "(" and "[", so what follows a closing brace can be told from a new statement. */
     int openBrackets;
@@ -367,8 +387,21 @@ implements PrettyPrettifier {
     }
 
     /** Inside brackets but outside every brace, where a fresh statement cannot begin. */
-    private boolean continuesExpression() {
+    boolean continuesExpression() {
       return this.braceDepth == 0 && this.openBrackets > 0;
+    }
+
+    /**
+     * True for a comma separating members of the innermost object literal: directly inside its
+     * braces rather than inside brackets opened within it (a comma in {@code f(1,2)} or {@code
+     * [1,2]} is a parameter or element separator, not a member break). Brackets opened outside
+     * the object - a module map wrapped in parens - do not count. Module clauses never qualify
+     * - {@code import} braces classify as clauses - so short imports stay inline.
+     */
+    boolean isObjectMemberComma() {
+      return this.braceDepth > 0
+          && this.braceKinds[this.braceDepth - 1] == LITERAL
+          && this.openBrackets == this.braceBrackets[this.braceDepth - 1];
     }
 
     void trimTrailingWhitespace() {
@@ -387,7 +420,9 @@ implements PrettyPrettifier {
         }
         this.braceKinds = Arrays.copyOf(this.braceKinds,
             Math.min(this.braceDepth * 2, PrettyPrettifier.MAX_INDENT_DEPTH * 2));
+        this.braceBrackets = Arrays.copyOf(this.braceBrackets, this.braceKinds.length);
       }
+      this.braceBrackets[this.braceDepth] = this.openBrackets;
       this.braceKinds[this.braceDepth++] = kind;
     }
 
@@ -515,7 +550,7 @@ implements PrettyPrettifier {
       }
       int drawn = Math.min(this.indent, PrettyPrettifier.MAX_INDENT_DEPTH);
       for (int i = 0; i < drawn; ++i) {
-        this.out.append(PrettyPrettifier.INDENT);
+        this.out.append(JavaScriptPrettifier.JS_INDENT);
       }
       this.out.append((CharSequence)this.line).append('\n');
       this.line.setLength(0);
