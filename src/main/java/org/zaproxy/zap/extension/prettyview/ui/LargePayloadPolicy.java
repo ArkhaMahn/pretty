@@ -101,12 +101,11 @@ public final class LargePayloadPolicy {
    * mispaint either way.
    */
   public static void applyForSize(RSyntaxTextArea area, String text) {
-    boolean wrap = PrettyLineWrap.isEnabled();
-    area.setLineWrap(wrap);
+    // Folding follows the wrap flag inside the area itself; see PrettyTextArea.setLineWrap.
+    area.setLineWrap(PrettyLineWrap.isEnabled());
     // Burp's wrapper asks its editor for the same preference: break wrapped rows on word
     // boundaries rather than mid-word.
     area.setWrapStyleWord(true);
-    area.setCodeFoldingEnabled(!wrap);
     area.setAntiAliasingEnabled(true);
   }
 
@@ -117,10 +116,8 @@ public final class LargePayloadPolicy {
    * lines, so the wrap setting is judged on text the editor can lay out either way.
    */
   static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split) {
-    boolean wrap = PrettyLineWrap.isEnabled();
-    area.setLineWrap(wrap);
+    area.setLineWrap(PrettyLineWrap.isEnabled());
     area.setWrapStyleWord(true);
-    area.setCodeFoldingEnabled(!wrap);
     area.setAntiAliasingEnabled(true);
   }
 }

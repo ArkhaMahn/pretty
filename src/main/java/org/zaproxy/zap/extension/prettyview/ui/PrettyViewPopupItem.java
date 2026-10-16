@@ -129,8 +129,8 @@ public final class PrettyViewPopupItem extends ExtensionPopupMenuItem {
     }
     boolean wrap = !area.getLineWrap();
     PrettyLineWrap.setEnabled(wrap);
+    // Folding follows the wrap flag inside the area itself.
     area.setLineWrap(wrap);
-    area.setCodeFoldingEnabled(!wrap);
     this.refreshCheck();
   }
 

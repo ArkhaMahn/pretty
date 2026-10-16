@@ -21,9 +21,35 @@ final class PrettyTextArea extends RSyntaxTextArea {
   /** The smallest increase in pixels, so a small font still gets a visible gap. */
   private static final int MIN_EXTRA = 2;
 
+  /**
+   * Whether construction finished. RSTA's own initialisation calls back into {@link
+   * #setLineWrap} (via {@code setTabSize}) while the fold manager is still null, so the
+   * folding half below stays out until the area exists.
+   */
+  private boolean ready;
+
+  PrettyTextArea() {
+    super();
+    this.ready = true;
+  }
+
   @Override
   public int getLineHeight() {
     int base = super.getLineHeight();
     return base + Math.max(MIN_EXTRA, Math.round(base * EXTRA_RATIO));
+  }
+
+  /**
+   * Burp's editor shapes its own {@code setLineWrap} the same way: the stock flag plus the
+   * housekeeping that belongs with it. A fold gutter cannot share its lines with wrapped rows,
+   * so folding follows the wrap flag here instead of at every call site - wrapping drops it,
+   * unwrapping restores it - and callers only ever set the wrap flag itself.
+   */
+  @Override
+  public void setLineWrap(boolean wrap) {
+    super.setLineWrap(wrap);
+    if (this.ready) {
+      this.setCodeFoldingEnabled(!wrap);
+    }
   }
 }
