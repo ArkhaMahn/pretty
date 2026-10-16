@@ -158,7 +158,7 @@ SearchableHttpPanelView {
       this.headerLength = 0;
       boolean wrap = LargePayloadPolicy.shouldWrap("");
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
-          DisplayLineSplitter.split("", wrap),
+          DisplayLineSplitter.split(""),
           ChunkedTextLoader.buildDocument("", "text/plain", 0, () -> ticket == this.generation.get()),
           wrap);
     });
@@ -170,18 +170,18 @@ SearchableHttpPanelView {
     // on the views that need it on.
     boolean wrap = LargePayloadPolicy.shouldWrap(result.getText());
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), wrap);
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
       this.applyIfCurrent(ticket, result, split,
           ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat(), wrap),
+              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
               this.headerEndDisplay(split), () -> ticket == this.generation.get()),
           wrap);
     } else {
       // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
       // both run here on the worker thread so the EDT only installs the result. A stale ticket
       // abandons the build at the next slice boundary, and applyIfCurrent drops whatever is left.
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText(), wrap);
-      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat(), wrap);
+      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
+      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
       RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
           this.headerEndDisplay(split), () -> ticket == this.generation.get());
       SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document, wrap));
@@ -310,7 +310,7 @@ SearchableHttpPanelView {
       body = parts.getBody();
     }
     PayloadFormat format = this.prettifierManager.detectFormat(this.model.getContentType(), body);
-    String style = LargePayloadPolicy.syntaxStyleFor(display, format, edit.getLineWrap());
+    String style = LargePayloadPolicy.syntaxStyleFor(display, format);
     if (ticket != this.generation.get()) {
       return;
     }

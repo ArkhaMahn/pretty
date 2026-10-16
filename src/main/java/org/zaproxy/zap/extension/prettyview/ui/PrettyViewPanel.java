@@ -30,6 +30,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rtextarea.FoldIndicator;
+import org.fife.ui.rtextarea.LineNumberFormatter;
 import org.fife.ui.rtextarea.RTextScrollPane;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -56,6 +57,8 @@ extends JPanel {
   private boolean userMovedView;
   /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
   private DisplayLineSplitter.Split split;
+  /** The gutter numbering in force before logical numbers, restored once the text is edited. */
+  private LineNumberFormatter defaultNumbers;
   private CopyAction copyAction;
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
@@ -328,6 +331,7 @@ extends JPanel {
    */
   public void setSplit(DisplayLineSplitter.Split split) {
     this.split = split;
+    this.applyLogicalNumbers(split);
     if (this.copyAction != null) {
       return;
     }
@@ -342,6 +346,52 @@ extends JPanel {
         this.copyAction,
         KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK),
         JComponent.WHEN_FOCUSED);
+  }
+
+  /**
+   * Numbers the gutter by logical lines: continuation pieces show no number, exactly like the
+   * editor's own soft-wrapped rows, so breaks never read as new lines. Without breaks the stock
+   * numbering stands. The mapping only describes the text as loaded, so the first edit falls
+   * back to plain numbering; chunked loading is guarded by the loading flag below.
+   */
+  private void applyLogicalNumbers(DisplayLineSplitter.Split split) {
+    if (this.scrollPane.getGutter() == null) {
+      return;
+    }
+    if (this.defaultNumbers == null) {
+      this.defaultNumbers = this.scrollPane.getGutter().getLineNumberFormatter();
+    }
+    if (split == null || split.addedBreaks() == 0) {
+      this.scrollPane.getGutter().setLineNumberFormatter(this.defaultNumbers);
+      return;
+    }
+    javax.swing.text.Document document = this.textArea.getDocument();
+    this.scrollPane.getGutter().setLineNumberFormatter(SplitLineNumbers.forSplit(split,
+        document.getDefaultRootElement(),
+        this.scrollPane.getGutter().getLineNumberingStartIndex()));
+    document.addDocumentListener(new javax.swing.event.DocumentListener() {
+      private void edited() {
+        if (!PrettyViewPanel.this.loading) {
+          PrettyViewPanel.this.scrollPane.getGutter()
+              .setLineNumberFormatter(PrettyViewPanel.this.defaultNumbers);
+          document.removeDocumentListener(this);
+        }
+      }
+
+      @Override
+      public void insertUpdate(javax.swing.event.DocumentEvent event) {
+        this.edited();
+      }
+
+      @Override
+      public void removeUpdate(javax.swing.event.DocumentEvent event) {
+        this.edited();
+      }
+
+      @Override
+      public void changedUpdate(javax.swing.event.DocumentEvent event) {
+      }
+    });
   }
 
   private String selectedTextAsFormatted() {
