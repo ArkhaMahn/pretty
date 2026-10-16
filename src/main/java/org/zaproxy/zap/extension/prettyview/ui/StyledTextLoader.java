@@ -22,17 +22,6 @@ final class StyledTextLoader {
   /** Characters inserted per slice while building. */
   private static final int SLICE_CHARS = 0x2000;
 
-  /**
-   * Formatted length past which the view streams: the head installs and paints instantly while
-   * the tail appends slice by slice, so the UI never blocks on a full first layout. Smaller
-   * payloads install in one step.
-   */
-  static final int STREAM_CHARS = 32768;
-  /** Head size for a streaming install: paints in milliseconds. */
-  static final int HEAD_CHARS = 8192;
-  /** Tail slice size for a streaming install: small enough to keep the UI alive. */
-  static final int TAIL_SLICE_CHARS = 0x2000;
-
   private StyledTextLoader() {
   }
 
@@ -44,27 +33,15 @@ final class StyledTextLoader {
   static DefaultStyledDocument buildDocument(
       String text, PayloadFormat format, EditorTheme.Palette palette, int fromLine,
       BooleanSupplier stillWanted) {
-    return StyledTextLoader.buildHead(text, format, palette, fromLine, Integer.MAX_VALUE,
-        stillWanted);
-  }
-
-  /**
-   * Builds the head of a streaming install: the first {@code headChars} characters with
-   * highlighting, for an instant first paint while the tail streams in behind it.
-   */
-  static DefaultStyledDocument buildHead(
-      String text, PayloadFormat format, EditorTheme.Palette palette, int fromLine,
-      int headChars, BooleanSupplier stillWanted) {
     String content = text == null ? "" : text;
-    String head = content.substring(0, Math.min(headChars, content.length()));
     DefaultStyledDocument document = new DefaultStyledDocument();
     try {
-      for (int offset = 0; offset < head.length(); offset += SLICE_CHARS) {
+      for (int offset = 0; offset < content.length(); offset += SLICE_CHARS) {
         if (!stillWanted.getAsBoolean()) {
           return null;
         }
         document.insertString(document.getLength(),
-            head.substring(offset, Math.min(head.length(), offset + SLICE_CHARS)), null);
+            content.substring(offset, Math.min(content.length(), offset + SLICE_CHARS)), null);
       }
     } catch (RuntimeException | BadLocationException e) {
       return null;
@@ -74,14 +51,19 @@ final class StyledTextLoader {
     }
     try {
       StyledHighlighter highlighter = StyledHighlighter.styles(palette);
-      if (!highlighter.highlight(document, format, fromLine, stillWanted)) {
+      StyledHighlighter.CarryStates carry = new StyledHighlighter.CarryStates();
+      if (!highlighter.highlight(document, format, fromLine, stillWanted, carry)) {
         return null;
       }
+      document.putProperty(CARRY_STATES_KEY, carry);
     } catch (RuntimeException | BadLocationException e) {
       return null;
     }
     return stillWanted.getAsBoolean() ? document : null;
   }
+
+  /** Document property holding the {@link StyledHighlighter.CarryStates} of a loaded document. */
+  static final String CARRY_STATES_KEY = "PrettyView.carryStates";
 
   /**
    * Swaps the built document into the editor on the EDT, armed for incremental highlighting.
@@ -94,6 +76,17 @@ final class StyledTextLoader {
     onTop.run();
     pane.discardAllEdits();
     onDone.run();
+  }
+
+  /** The carry states stored on a document, created on demand. */
+  static StyledHighlighter.CarryStates carryOf(DefaultStyledDocument document) {
+    Object existing = document.getProperty(CARRY_STATES_KEY);
+    if (existing instanceof StyledHighlighter.CarryStates) {
+      return (StyledHighlighter.CarryStates) existing;
+    }
+    StyledHighlighter.CarryStates fresh = new StyledHighlighter.CarryStates();
+    document.putProperty(CARRY_STATES_KEY, fresh);
+    return fresh;
   }
 
   /**
@@ -133,21 +126,22 @@ final class StyledTextLoader {
     }
 
     /**
-     * Repaints the lines around an edit. Carry state (block comments and the like) flows from
-     * above, so highlighting restarts a few lines up; the window is small for typing and grows
-     * only for pathological nesting.
+     * Repaints the edited lines, resuming carry state from the closest known line instead of
+     * scanning the whole document, so typing stays instant no matter the payload size.
+     * Attribute changes are kept out of the undo history: they are not user edits.
      */
     private void repaintLines(int offset, int inserted) {
       DefaultStyledDocument document = (DefaultStyledDocument) this.pane.getDocument();
-      Element root = document.getDefaultRootElement();
-      int first = Math.max(0, root.getElementIndex(offset) - 4);
-      int last = root.getElementIndex(Math.min(offset + inserted, document.getLength()));
       StyledHighlighter highlighter = StyledHighlighter.styles(this.palette);
-      StyledHighlighter.State state = new StyledHighlighter.State();
+      StyledHighlighter.CarryStates carry = StyledTextLoader.carryOf(document);
+      Element root = document.getDefaultRootElement();
+      int first = root.getElementIndex(offset);
+      int last = root.getElementIndex(Math.min(offset + inserted, document.getLength()));
+      carry.dropAfter(first);
+      int[] from = new int[1];
+      StyledHighlighter.State state = carry.resumeFrom(first, from);
       try {
-        // Rebuild the carry state forward from the document start to the window; the scan is
-        // character-cheap next to styling, and keeps multi-line constructs correct.
-        for (int line = 0; line < first; ++line) {
+        for (int line = from[0]; line < first; ++line) {
           Element element = root.getElement(line);
           int start = element.getStartOffset();
           int end = Math.min(element.getEndOffset(), document.getLength());
@@ -155,14 +149,21 @@ final class StyledTextLoader {
             highlighter.scanLine(document.getText(start, end - start), this.format, state);
           }
         }
-        for (int line = first; line <= Math.min(last, root.getElementCount() - 1); ++line) {
-          Element element = root.getElement(line);
-          int start = element.getStartOffset();
-          int end = Math.min(element.getEndOffset(), document.getLength());
-          if (end > start) {
+        document.removeUndoableEditListener(this.pane.undoHistory());
+        try {
+          for (int line = first; line <= last && line < root.getElementCount(); ++line) {
+            Element element = root.getElement(line);
+            int start = element.getStartOffset();
+            int end = Math.min(element.getEndOffset(), document.getLength());
+            if (end <= start) {
+              continue;
+            }
             highlighter.paintLine(document, start, document.getText(start, end - start),
                 this.format, state);
+            carry.set(line, state);
           }
+        } finally {
+          document.addUndoableEditListener(this.pane.undoHistory());
         }
       } catch (RuntimeException | BadLocationException e) {
         // Never break typing for highlighting; the next pause repaints.

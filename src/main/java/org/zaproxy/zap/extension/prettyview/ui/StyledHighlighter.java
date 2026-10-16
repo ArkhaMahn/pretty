@@ -45,6 +45,60 @@ final class StyledHighlighter {
     boolean inScript;
     boolean scriptIsJson;
     boolean inStyle;
+
+    State copy() {
+      State copy = new State();
+      copy.inBlockComment = this.inBlockComment;
+      copy.inHtmlComment = this.inHtmlComment;
+      copy.inCdata = this.inCdata;
+      copy.inTemplate = this.inTemplate;
+      copy.templateDepth = this.templateDepth;
+      copy.inScript = this.inScript;
+      copy.scriptIsJson = this.scriptIsJson;
+      copy.inStyle = this.inStyle;
+      return copy;
+    }
+  }
+
+  /**
+   * Remembers the carry state at the start of every painted line, so an incremental repaint
+   * resumes from the closest known state instead of scanning the whole document: typing stays
+   * instant no matter how large the payload grows. Entries past an edit are dropped and rebuilt
+   * on demand; the list is rebuilt wholesale by {@link #highlight}.
+   */
+  static final class CarryStates {
+    private final java.util.ArrayList<State> states = new java.util.ArrayList<State>();
+
+    void clear() {
+      this.states.clear();
+    }
+
+    void set(int line, State state) {
+      while (this.states.size() <= line) {
+        this.states.add(null);
+      }
+      this.states.set(line, state.copy());
+    }
+
+    /** Latest known-good state at or before {@code line}, or a fresh one. */
+    State resumeFrom(int line, int[] startOut) {
+      for (int i = Math.min(line, this.states.size() - 1); i >= 0; --i) {
+        State known = this.states.get(i);
+        if (known != null) {
+          startOut[0] = i;
+          return known.copy();
+        }
+      }
+      startOut[0] = 0;
+      return new State();
+    }
+
+    /** Drops every entry after {@code line}; the next repaint rebuilds them. */
+    void dropAfter(int line) {
+      while (this.states.size() > line + 1) {
+        this.states.remove(this.states.size() - 1);
+      }
+    }
   }
 
   private final AttributeSet base;
@@ -105,16 +159,17 @@ final class StyledHighlighter {
   }
 
   /**
-   * Paints the document for {@code format} from line {@code fromLine} (0-based), scanning the
-   * lines above only for carry state. Header lines keep the default colour; only the body
-   * highlights. Linear in the document size; callers run it off the EDT for large payloads
-   * and suppress undo around it. Returns false when {@code stillWanted} went false partway,
-   * in which case the document is half-painted and the caller drops it.
+   * Paints the document for {@code format} from line {@code fromLine} (0-based), recording
+   * each line's carry state into {@code carry}. Header lines keep the default colour; only
+   * the body highlights. Linear in the document size; callers run it off the EDT for large
+   * payloads and suppress undo around it. Returns false when {@code stillWanted} went false
+   * partway, in which case the document is half-painted and the caller drops it.
    */
   boolean highlight(DefaultStyledDocument document, PayloadFormat format, int fromLine,
-      java.util.function.BooleanSupplier stillWanted)
+      java.util.function.BooleanSupplier stillWanted, CarryStates carry)
       throws BadLocationException {
     Element root = document.getDefaultRootElement();
+    carry.clear();
     State state = new State();
     for (int line = 0; line < root.getElementCount(); ++line) {
       if ((line & 255) == 0 && !stillWanted.getAsBoolean()) {
@@ -128,6 +183,7 @@ final class StyledHighlighter {
         continue;
       }
       String text = document.getText(start, length);
+      carry.set(line, state);
       if (line < fromLine) {
         this.scanLine(text, format, state);
       } else {
