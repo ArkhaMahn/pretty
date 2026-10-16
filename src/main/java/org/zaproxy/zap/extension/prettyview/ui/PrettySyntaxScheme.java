@@ -36,6 +36,13 @@ final class PrettySyntaxScheme {
     Color cdata = dark ? new Color(213, 230, 240) : new Color(204, 102, 0);
     Color entity = dark ? new Color(103, 140, 177) : new Color(0, 128, 0);
     Color error = dark ? new Color(244, 71, 71) : new Color(204, 0, 0);
+    // JSON value tones, requested hues: soft-orange keys, light-green strings, bright-blue
+    // numbers. They live on token types no JSON body ever emits for another purpose (24 is
+    // otherwise unused, 14 is char literals, 12 is hex numbers), so every other language keeps
+    // its Burp hues and only JSON reads in these colours.
+    Color jsonKey = dark ? new Color(209, 154, 102) : new Color(140, 90, 30);
+    Color jsonString = dark ? new Color(152, 195, 121) : new Color(30, 123, 52);
+    Color jsonNumber = dark ? new Color(97, 175, 239) : new Color(11, 95, 192);
 
     SyntaxScheme scheme = new SyntaxScheme(font, false);
     scheme.setStyle(0, style(text, font));
@@ -50,9 +57,9 @@ final class PrettySyntaxScheme {
     scheme.setStyle(9, style(keyword, font));
     scheme.setStyle(10, style(number, font));
     scheme.setStyle(11, style(number, font));
-    scheme.setStyle(12, style(number, font));
+    scheme.setStyle(12, style(jsonNumber, font));
     scheme.setStyle(13, style(string, font));
-    scheme.setStyle(14, style(string, font));
+    scheme.setStyle(14, style(jsonString, font));
     scheme.setStyle(15, style(string, font));
     scheme.setStyle(16, style(keyword, font));
     scheme.setStyle(17, style(tagName, font));
@@ -64,7 +71,7 @@ final class PrettySyntaxScheme {
     scheme.setStyle(21, style(text, font));
     scheme.setStyle(22, style(operator, font));
     scheme.setStyle(23, style(operator, font));
-    scheme.setStyle(24, style(preprocessor, font));
+    scheme.setStyle(24, style(jsonKey, font));
     scheme.setStyle(25, style(text, font));
     scheme.setStyle(26, style(tagName, font));
     scheme.setStyle(27, style(text, font));

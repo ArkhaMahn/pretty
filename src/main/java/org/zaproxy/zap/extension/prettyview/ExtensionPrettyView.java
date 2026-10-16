@@ -81,6 +81,8 @@ extends ExtensionAdaptor {
     for (PrettyTextPopupItem.Kind kind : PrettyTextPopupItem.Kind.values()) {
       extensionHook.getHookMenu().addPopupMenuItem(new PrettyTextPopupItem(kind));
     }
+    extensionHook.getHookMenu().addPopupMenuItem(
+        new org.zaproxy.zap.extension.prettyview.ui.PrettyViewPopupItem());
   }
 
   /**

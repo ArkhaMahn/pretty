@@ -16,7 +16,7 @@ final class EditorTheme {
   static final Palette LIGHT = new Palette("light", new Color(251, 251, 251), new Color(20, 20, 20), new Color(235, 241, 246), new Color(20, 20, 20), new Color(43, 43, 43),
       new Color(120, 120, 120), new Color(120, 120, 120), new Color(225, 224, 224), new Color(234, 234, 255), new Color(0, 0, 128),
       new Color(221, 221, 221), new Color(255, 255, 0));
-  static final Palette DARK = new Palette("dark", new Color(50, 51, 52), PrettySyntaxScheme.FOREGROUND, new Color(83, 132, 178), new Color(255, 255, 255), new Color(197, 199, 200),
+  static final Palette DARK = new Palette("dark", new Color(43, 43, 43), PrettySyntaxScheme.FOREGROUND, new Color(83, 132, 178), new Color(255, 255, 255), new Color(197, 199, 200),
       new Color(160, 160, 160), new Color(160, 160, 160), new Color(72, 76, 83), new Color(58, 61, 65), new Color(110, 110, 110),
       new Color(85, 85, 85), new Color(0, 16, 103));
   static final Color SEARCH_HIGHLIGHT = new Color(0, 122, 204);

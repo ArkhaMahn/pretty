@@ -91,16 +91,19 @@ public final class LargePayloadPolicy {
   }
 
   /**
-   * The editor settings for a payload: no wrapping, folding on.
+   * The editor settings for a payload: wrapping follows the View menu toggle (on by default),
+   * folding fills the gap when wrapping is off.
    *
-   * <p>Lines scroll horizontally instead of wrapping, so folding sees the real structure and wrapped
-   * rows never fight the fold gutter for the same line (Burp disables folding the moment wrapping
-   * goes on, for the same reason). Monster lines never reach the editor unwrapped - {@link
-   * DisplayLineSplitter} breaks those first - so no row is wide enough to mispaint.
+   * <p>Lines wrap in the editor instead of scrolling sideways, and folding is disabled while
+   * they do: a fold gutter cannot share its lines with wrapped rows, so Burp drops folding the
+   * moment wrapping goes on, and this does the same. Monster lines never reach the editor
+   * unwrapped - {@link DisplayLineSplitter} breaks those first - so no row is wide enough to
+   * mispaint either way.
    */
   public static void applyForSize(RSyntaxTextArea area, String text) {
-    area.setLineWrap(false);
-    area.setCodeFoldingEnabled(true);
+    boolean wrap = PrettyLineWrap.isEnabled();
+    area.setLineWrap(wrap);
+    area.setCodeFoldingEnabled(!wrap);
     area.setAntiAliasingEnabled(true);
   }
 
@@ -108,11 +111,12 @@ public final class LargePayloadPolicy {
    * The editor settings for a payload that is about to be displayed as {@code split}.
    *
    * <p>Same as {@link #applyForSize(RSyntaxTextArea, String)}: the split only ever shortens monster
-   * lines, so the no-wrap setting is judged on text the editor can lay out either way.
+   * lines, so the wrap setting is judged on text the editor can lay out either way.
    */
   static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split) {
-    area.setLineWrap(false);
-    area.setCodeFoldingEnabled(true);
+    boolean wrap = PrettyLineWrap.isEnabled();
+    area.setLineWrap(wrap);
+    area.setCodeFoldingEnabled(!wrap);
     area.setAntiAliasingEnabled(true);
   }
 }
