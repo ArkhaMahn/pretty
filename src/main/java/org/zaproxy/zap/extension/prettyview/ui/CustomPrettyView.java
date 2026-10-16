@@ -159,18 +159,22 @@ SearchableHttpPanelView {
     boolean wrap = LargePayloadPolicy.shouldWrap(result.getText());
     EditorTheme.Palette palette = EditorTheme.palette();
     int fromLine = Math.max(0, this.firstBodyLine(result.getText()) - 1);
+    // Large payloads build only a head on the worker: it installs and paints in milliseconds
+    // while the tail streams in slice by slice (see installContent).
+    int headChars = result.getText().length() > StyledTextLoader.STREAM_CHARS
+        ? StyledTextLoader.HEAD_CHARS : Integer.MAX_VALUE;
     if (SwingUtilities.isEventDispatchThread()) {
       this.applyIfCurrent(ticket, result,
-          StyledTextLoader.buildDocument(result.getText(), result.getFormat(), palette, fromLine,
-              () -> ticket == this.generation.get()),
+          StyledTextLoader.buildHead(result.getText(), result.getFormat(), palette, fromLine,
+              headChars, () -> ticket == this.generation.get()),
           wrap);
     } else {
       // Building the document styles it, and styling a ~5 MB payload lexes for hundreds of
       // milliseconds; both run here on the worker thread so the EDT only installs the result.
       // A stale ticket abandons the build at the next slice boundary, and applyIfCurrent drops
       // whatever is left.
-      javax.swing.text.DefaultStyledDocument document = StyledTextLoader.buildDocument(
-          result.getText(), result.getFormat(), palette, fromLine,
+      javax.swing.text.DefaultStyledDocument document = StyledTextLoader.buildHead(
+          result.getText(), result.getFormat(), palette, fromLine, headChars,
           () -> ticket == this.generation.get());
       SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, document, wrap));
     }
@@ -219,17 +223,60 @@ SearchableHttpPanelView {
     PrettyTextPane body = this.panel.getTextPane();
     body.setEditable(false);
     this.panel.beginLoad();
+    boolean stream = result.getText().length() - document.getLength() > 0;
     StyledTextLoader.installDocument(body, document, result.getFormat(), EditorTheme.palette(),
         this.panel::pinToTop, () -> {
       if (ticket != this.generation.get()) {
         return;
       }
-      this.lastFormatted = result.getText();
-      this.loading = false;
-      this.panel.setEditable(this.allowsEdits());
-      this.panel.endLoad();
       this.armLiveHighlight(body);
+      if (stream) {
+        this.streamTail(ticket, result, document.getLength());
+      } else {
+        this.finishInstall(ticket, body);
+      }
     });
+  }
+
+  /**
+   * Appends the tail of a large payload slice by slice, yielding to the UI between slices so it
+   * stays alive: the head already painted in milliseconds, and each slice lands in well under a
+   * second. A superseded ticket abandons the chain silently.
+   */
+  private void streamTail(int ticket, PrettyResult result, int offset) {
+    if (ticket != this.generation.get()) {
+      return;
+    }
+    String text = result.getText();
+    int end = Math.min(offset + StyledTextLoader.TAIL_SLICE_CHARS, text.length());
+    PrettyTextPane body = this.panel.getTextPane();
+    try {
+      body.getDocument().insertString(body.getDocument().getLength(), text.substring(offset, end),
+          null);
+    } catch (RuntimeException | BadLocationException e) {
+      this.finishInstall(ticket, body);
+      return;
+    }
+    if (end >= text.length()) {
+      this.finishInstall(ticket, body);
+      return;
+    }
+    SwingUtilities.invokeLater(() -> this.streamTail(ticket, result, end));
+  }
+
+  /**
+   * Completes an install once the full text has landed. Reads back what is actually shown, so
+   * a failed stream can never write a partial body back on save.
+   */
+  private void finishInstall(int ticket, PrettyTextPane body) {
+    if (ticket != this.generation.get()) {
+      return;
+    }
+    body.discardAllEdits();
+    this.lastFormatted = body.getText();
+    this.loading = false;
+    this.panel.setEditable(this.allowsEdits());
+    this.panel.endLoad();
   }
 
   /**

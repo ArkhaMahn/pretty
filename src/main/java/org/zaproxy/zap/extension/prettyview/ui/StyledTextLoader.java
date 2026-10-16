@@ -22,6 +22,17 @@ final class StyledTextLoader {
   /** Characters inserted per slice while building. */
   private static final int SLICE_CHARS = 0x2000;
 
+  /**
+   * Formatted length past which the view streams: the head installs and paints instantly while
+   * the tail appends slice by slice, so the UI never blocks on a full first layout. Smaller
+   * payloads install in one step.
+   */
+  static final int STREAM_CHARS = 32768;
+  /** Head size for a streaming install: paints in milliseconds. */
+  static final int HEAD_CHARS = 8192;
+  /** Tail slice size for a streaming install: small enough to keep the UI alive. */
+  static final int TAIL_SLICE_CHARS = 0x2000;
+
   private StyledTextLoader() {
   }
 
@@ -33,15 +44,27 @@ final class StyledTextLoader {
   static DefaultStyledDocument buildDocument(
       String text, PayloadFormat format, EditorTheme.Palette palette, int fromLine,
       BooleanSupplier stillWanted) {
+    return StyledTextLoader.buildHead(text, format, palette, fromLine, Integer.MAX_VALUE,
+        stillWanted);
+  }
+
+  /**
+   * Builds the head of a streaming install: the first {@code headChars} characters with
+   * highlighting, for an instant first paint while the tail streams in behind it.
+   */
+  static DefaultStyledDocument buildHead(
+      String text, PayloadFormat format, EditorTheme.Palette palette, int fromLine,
+      int headChars, BooleanSupplier stillWanted) {
     String content = text == null ? "" : text;
+    String head = content.substring(0, Math.min(headChars, content.length()));
     DefaultStyledDocument document = new DefaultStyledDocument();
     try {
-      for (int offset = 0; offset < content.length(); offset += SLICE_CHARS) {
+      for (int offset = 0; offset < head.length(); offset += SLICE_CHARS) {
         if (!stillWanted.getAsBoolean()) {
           return null;
         }
         document.insertString(document.getLength(),
-            content.substring(offset, Math.min(content.length(), offset + SLICE_CHARS)), null);
+            head.substring(offset, Math.min(head.length(), offset + SLICE_CHARS)), null);
       }
     } catch (RuntimeException | BadLocationException e) {
       return null;
