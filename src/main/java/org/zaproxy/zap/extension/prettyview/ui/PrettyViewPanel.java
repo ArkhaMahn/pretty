@@ -2,36 +2,27 @@ package org.zaproxy.zap.extension.prettyview.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
-import java.awt.HeadlessException;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
-import java.awt.event.ContainerAdapter;
-import java.awt.event.ContainerEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
-import java.awt.event.MouseWheelListener;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.ActionMap;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
+import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 
 import javax.swing.text.JTextComponent;
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
-import org.fife.ui.rtextarea.FoldIndicator;
-import org.fife.ui.rtextarea.LineNumberFormatter;
-import org.fife.ui.rtextarea.RTextScrollPane;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.parosproxy.paros.network.HttpMessage;
@@ -47,32 +38,26 @@ extends JPanel {
   private static final Logger LOGGER = LogManager.getLogger(PrettyViewPanel.class);
   private static final long serialVersionUID = 1L;
   private static final String COPY_KEY = "copy";
-  private final RSyntaxTextArea textArea;
-  private final RTextScrollPane scrollPane;
+  private final PrettyTextPane textPane;
+  private final JScrollPane scrollPane;
+  private final LineNumberGutter gutter;
   private final PrettyNoticeBar noticeBar;
   private final PrettySearchBar searchBar;
   /** True while a payload is streaming in, which is when the view is held at the top of the document. */
   private boolean loading;
   /** Set once the user scrolls or clicks during a load, after which the view is left entirely alone. */
   private boolean userMovedView;
-  /** How the displayed text was broken into editor-sized lines, so a copy can put it back together. */
-  private DisplayLineSplitter.Split split;
-  /** The gutter numbering in force before logical numbers, restored once the text is edited. */
-  private LineNumberFormatter defaultNumbers;
-  private CopyAction copyAction;
   /** The model providing message data for ZAP actions. */
   private final PrettyViewModel model;
 
-  public PrettyViewPanel(RSyntaxTextArea textArea, PrettyViewModel model) {
+  public PrettyViewPanel(PrettyTextPane textPane, PrettyViewModel model) {
     super(new BorderLayout());
-    this.textArea = textArea;
+    this.textPane = textPane;
     this.model = model;
     // No Pretty-owned popup: right-click shows ZAP's own message popup, exactly like the core
-    // text views (focus grab, then MainPopupMenu for this message). RSyntax's default popup is
-    // detached so only one menu can ever appear; text operations come from globally registered
-    // entries that act directly on this editor.
-    this.textArea.setPopupMenu(null);
-    this.textArea.addMouseListener(new MouseAdapter() {
+    // text views (focus grab, then MainPopupMenu for this message).
+    this.textPane.setComponentPopupMenu(null);
+    this.textPane.addMouseListener(new MouseAdapter() {
       @Override
       public void mousePressed(MouseEvent event) {
         PrettyViewPanel.this.showCoreMenu(event);
@@ -83,22 +68,15 @@ extends JPanel {
         PrettyViewPanel.this.showCoreMenu(event);
       }
     });
-    this.scrollPane = new RTextScrollPane(textArea);
-    this.scrollPane.setFoldIndicatorEnabled(true);
-    // Fold indicators come and go with the folding flag (unwrapping re-adds a fresh one), and
-    // every fresh one previews collapsed text on hover by default. The listener keeps previews
-    // off whichever indicator is current; EditorTheme.apply covers the one present at theme time.
-    this.scrollPane.getGutter().addContainerListener(new ContainerAdapter() {
-      @Override
-      public void componentAdded(ContainerEvent event) {
-        if (event.getChild() instanceof FoldIndicator) {
-          ((FoldIndicator) event.getChild()).setShowCollapsedRegionToolTips(false);
-        }
-      }
-    });
+    this.scrollPane = new JScrollPane(textPane);
+    this.scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+    // Wrapped by default, so no horizontal bar until unwrapping asks for one.
+    this.scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+    this.gutter = new LineNumberGutter(textPane);
+    this.scrollPane.setRowHeaderView(this.gutter);
     this.noticeBar = new PrettyNoticeBar();
-    this.searchBar = new PrettySearchBar(textArea);
-    EditorTheme.apply(textArea, this.scrollPane, EditorTheme.palette());
+    this.searchBar = new PrettySearchBar(textPane);
+    EditorTheme.apply(textPane, this.scrollPane, EditorTheme.palette());
     JPanel header = new JPanel(new BorderLayout());
     header.add((Component)this.noticeBar, "North");
     header.add((Component)this.searchBar, "South");
@@ -124,7 +102,7 @@ extends JPanel {
     // document grows, and the pin would then disable itself on the first chunk.
     this.scrollPane.addMouseWheelListener(event -> this.noteUserMovedView());
     this.watchForClicks(this.scrollPane.getViewport());
-    this.watchForKeys(this.textArea);
+    this.watchForKeys(this.textPane);
     this.installScrolling();
     this.installSearchKeys();
   }
@@ -138,13 +116,13 @@ extends JPanel {
     if (!event.isPopupTrigger()) {
       return;
     }
-    if (!this.textArea.isFocusOwner()) {
-      this.textArea.requestFocusInWindow();
+    if (!this.textPane.isFocusOwner()) {
+      this.textPane.requestFocusInWindow();
     }
-    if (this.textArea.getSelectionStart() == this.textArea.getSelectionEnd()) {
-      int position = this.textArea.viewToModel2D(event.getPoint());
+    if (this.textPane.getSelectionStart() == this.textPane.getSelectionEnd()) {
+      int position = this.textPane.viewToModel(event.getPoint());
       if (position >= 0) {
-        this.textArea.setCaretPosition(position);
+        this.textPane.setCaretPosition(position);
       }
     }
     Message message = this.model.getMessage();
@@ -160,7 +138,7 @@ extends JPanel {
       view.getPopupMenu().show(
           new DefaultSingleHttpMessageContainer(
               HttpPanelTextView.DEFAULT_MESSAGE_CONTAINER_NAME,
-              this.textArea,
+              this.textPane,
               (HttpMessage) message),
           event.getX(),
           event.getY());
@@ -175,11 +153,9 @@ extends JPanel {
    * <p>Swing's default unit increment comes from the view, and on a text area that can be a few
    * pixels, which reads as scrolling that barely moves however hard the wheel is turned - while
    * a whole line per notch jumps. A third of a row steps instead, at the same paint cost per
-   * notch either way. No animation: every notch lands in a single paint each, and FlatLaf's
-   * global smooth scrolling (on by default) is switched off for this pane.
+   * notch either way. No animation: every notch lands in a single paint each.
    */
   private void installScrolling() {
-    this.scrollPane.putClientProperty("JScrollPane.smoothScrolling", Boolean.FALSE);
     this.applyScrollUnit();
     this.scrollPane.getViewport().addComponentListener(new ComponentAdapter() {
       @Override
@@ -190,9 +166,7 @@ extends JPanel {
   }
 
   private void applyScrollUnit() {
-    // Sub-line steps so a wheel notch glides instead of jumping a whole line at a time; the
-    // floor keeps the gesture meaningful however small the font runs.
-    int unit = Math.max(8, this.textArea.getLineHeight() / 3);
+    int unit = Math.max(8, this.textPane.getFontMetrics(this.textPane.getFont()).getHeight() / 3);
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null) {
       vertical.setUnitIncrement(unit);
@@ -209,7 +183,7 @@ extends JPanel {
     if (vertical == null) {
       return;
     }
-    int unit = Math.max(8, this.textArea.getLineHeight());
+    int unit = Math.max(8, this.textPane.getFontMetrics(this.textPane.getFont()).getHeight());
     int height = this.scrollPane.getViewport().getHeight();
     vertical.setBlockIncrement(Math.max(unit, height - unit));
   }
@@ -226,10 +200,10 @@ extends JPanel {
 
   /** Ctrl+F opens the find bar, F3 walks the matches, and Escape puts the bar away again. */
   private void installSearchKeys() {
-    this.bind(this.textArea, KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "pretty-find", this::openSearch);
-    this.bind(this.textArea, KeyStroke.getKeyStroke(KeyEvent.VK_F3, 0), "pretty-find-next", this.searchBar::findNext);
-    this.bind(this.textArea, KeyStroke.getKeyStroke(KeyEvent.VK_F3, InputEvent.SHIFT_DOWN_MASK), "pretty-find-previous", this.searchBar::findPrevious);
-    this.bind(this.textArea, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "pretty-find-close", () -> {
+    this.bind(this.textPane, KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "pretty-find", this::openSearch);
+    this.bind(this.textPane, KeyStroke.getKeyStroke(KeyEvent.VK_F3, 0), "pretty-find-next", this.searchBar::findNext);
+    this.bind(this.textPane, KeyStroke.getKeyStroke(KeyEvent.VK_F3, InputEvent.SHIFT_DOWN_MASK), "pretty-find-previous", this.searchBar::findPrevious);
+    this.bind(this.textPane, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "pretty-find-close", () -> {
       if (this.searchBar.isOpen()) {
         this.searchBar.close();
       }
@@ -250,7 +224,7 @@ extends JPanel {
 
   /** Opens the find bar; the popup's Find entry and Ctrl+F call this. */
   void openSearch() {
-    this.searchBar.open(this.textArea.getSelectedText());
+    this.searchBar.open(this.textPane.getSelectedText());
   }
 
   private void watchForClicks(Component viewport) {
@@ -262,7 +236,7 @@ extends JPanel {
     });
   }
 
-  private void watchForKeys(JTextArea component) {
+  private void watchForKeys(JTextComponent component) {
     component.addKeyListener(new KeyAdapter() {
       @Override
       public void keyPressed(KeyEvent event) {
@@ -308,8 +282,8 @@ extends JPanel {
     if (this.userMovedView) {
       return;
     }
-    if (this.textArea.getCaretPosition() != 0) {
-      this.textArea.setCaretPosition(0);
+    if (this.textPane.getCaretPosition() != 0) {
+      this.textPane.setCaretPosition(0);
     }
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null && vertical.getValue() != 0) {
@@ -318,177 +292,44 @@ extends JPanel {
   }
 
   public void setEditable(boolean editable) {
-    this.textArea.setEditable(editable);
-  }
-
-  public RSyntaxTextArea getTextArea() {
-    return this.textArea;
+    this.textPane.setEditable(editable);
   }
 
   /**
-   * Reminds the panel how the displayed text was broken up, so a copy hands back the characters as the
-   * response holds them rather than as the editor shows them.
+   * Wraps or unwraps at the view width, keeping the scrollbars honest: wrapped content never
+   * scrolls sideways, unwrapped content does.
    */
-  public void setSplit(DisplayLineSplitter.Split split) {
-    this.split = split;
-    this.applyLogicalNumbers(split);
-    if (this.copyAction != null) {
-      return;
-    }
-    this.copyAction = new CopyAction();
-    ActionMap actions = this.textArea.getActionMap();
+  void setWrapped(boolean wrap) {
+    this.textPane.setWrapped(wrap);
+    this.scrollPane.setHorizontalScrollBarPolicy(wrap
+        ? JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+        : JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+  }
+
+  public PrettyTextPane getTextPane() {
+    return this.textPane;
+  }
+
+  /** Menu Copy: the editor holds exactly the message characters, so the default copy is exact. */
+  void copySelection() {
+    ActionMap actions = this.textPane.getActionMap();
     Object existing = actions.get(COPY_KEY);
     if (existing instanceof Action) {
-      this.copyAction.delegate = (Action) existing;
-    }
-    actions.put(COPY_KEY, this.copyAction);
-    this.textArea.registerKeyboardAction(
-        this.copyAction,
-        KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK),
-        JComponent.WHEN_FOCUSED);
-  }
-
-  /**
-   * Numbers the gutter by logical lines: continuation pieces show no number, exactly like the
-   * editor's own soft-wrapped rows, so breaks never read as new lines. Without breaks the stock
-   * numbering stands. The mapping only describes the text as loaded, so the first edit falls
-   * back to plain numbering; chunked loading is guarded by the loading flag below.
-   */
-  private void applyLogicalNumbers(DisplayLineSplitter.Split split) {
-    if (this.scrollPane.getGutter() == null) {
-      return;
-    }
-    if (this.defaultNumbers == null) {
-      this.defaultNumbers = this.scrollPane.getGutter().getLineNumberFormatter();
-    }
-    if (split == null || split.addedBreaks() == 0) {
-      this.scrollPane.getGutter().setLineNumberFormatter(this.defaultNumbers);
-      return;
-    }
-    javax.swing.text.Document document = this.textArea.getDocument();
-    this.scrollPane.getGutter().setLineNumberFormatter(SplitLineNumbers.forSplit(split,
-        document.getDefaultRootElement(),
-        this.scrollPane.getGutter().getLineNumberingStartIndex()));
-    document.addDocumentListener(new javax.swing.event.DocumentListener() {
-      private void edited() {
-        if (!PrettyViewPanel.this.loading) {
-          PrettyViewPanel.this.scrollPane.getGutter()
-              .setLineNumberFormatter(PrettyViewPanel.this.defaultNumbers);
-          document.removeDocumentListener(this);
-        }
-      }
-
-      @Override
-      public void insertUpdate(javax.swing.event.DocumentEvent event) {
-        this.edited();
-      }
-
-      @Override
-      public void removeUpdate(javax.swing.event.DocumentEvent event) {
-        this.edited();
-      }
-
-      @Override
-      public void changedUpdate(javax.swing.event.DocumentEvent event) {
-      }
-    });
-  }
-
-  private String selectedTextAsFormatted() {
-    if (this.split == null) {
-      return null;
-    }
-    // The break offsets only describe the text as loaded; once edited they stop meaning
-    // anything, so an edited selection copies literally (see CopyAction).
-    if (!this.split.isDisplayText(this.textArea.getText())) {
-      return null;
-    }
-    int from = this.textArea.getSelectionStart();
-    int to = this.textArea.getSelectionEnd();
-    if (from == to) {
-      return null;
-    }
-    if (from > to) {
-      int swap = from;
-      from = to;
-      to = swap;
-    }
-    try {
-      return this.split.originalRange(from, to);
-    } catch (RuntimeException e) {
-      return null;
-    }
-  }
-
-  /** Menu Copy: split-aware once a payload is shown, literal before the first load. */
-  void copySelection() {
-    if (this.copyAction != null) {
-      this.copyAction.actionPerformed(
-          new ActionEvent(this.textArea, ActionEvent.ACTION_PERFORMED, "copy"));
+      ((Action) existing).actionPerformed(
+          new ActionEvent(this.textPane, ActionEvent.ACTION_PERFORMED, "copy"));
     } else {
-      PrettyViewPanel.copyLiteral(this.textArea);
-    }
-  }
-
-  /** Copies the selection to the clipboard; a no-op without a selection. */
-  private static void copyLiteral(JTextComponent area) {
-    String selected = area.getSelectedText();
-    if (selected == null || selected.isEmpty()) {
-      return;
-    }
-    try {
-      Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
-          new StringSelection(selected), null);
-    } catch (HeadlessException | IllegalStateException | SecurityException e) {
-      LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
-    }
-  }
-
-  /** Copies through the split so the clipboard holds the message's own characters. */
-  private final class CopyAction extends AbstractAction {
-    private static final long serialVersionUID = 1L;
-    private Action delegate;
-
-    @Override
-    public void actionPerformed(ActionEvent event) {
-      RSyntaxTextArea area = PrettyViewPanel.this.textArea;
-      String selected = area.getSelectedText();
-      if (selected == null || selected.isEmpty()) {
-        // Nothing selected: behave like the default copy (a no-op).
-        if (this.delegate != null) {
-          this.delegate.actionPerformed(event);
-        }
-        return;
-      }
-      String formatted = PrettyViewPanel.this.selectedTextAsFormatted();
-      // Never put an empty string on the clipboard for a non-empty selection: when the split
-      // mapping comes back empty (edited text, or a break-only span) the literal selection is
-      // what the user asked for.
-      if (formatted != null && !formatted.isEmpty()) {
-        try {
-          Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
-              new StringSelection(formatted), null);
-          return;
-        } catch (HeadlessException | IllegalStateException | SecurityException e) {
-          LOGGER.warn("PrettyView copy failed: clipboard unavailable", e);
-        }
-      }
-      if (this.delegate != null) {
-        this.delegate.actionPerformed(event);
-      } else {
-        area.copy();
-      }
+      this.textPane.copy();
     }
   }
 
   @Override
   public void updateUI() {
     super.updateUI();
-    if (this.textArea != null) {
+    if (this.textPane != null) {
       // ZAP republishes its fonts when the look and feel changes, and its own syntax highlighted text area
       // reads them again at that point. Without this the panel would keep the font it was built with for
       // the rest of the session.
-      EditorTheme.apply(this.textArea, this.scrollPane, EditorTheme.palette());
+      EditorTheme.apply(this.textPane, this.scrollPane, EditorTheme.palette());
       if (this.scrollPane != null) {
         // The font just changed, so a row is a different height and the wheel should move by that much.
         this.applyScrollUnit();
@@ -524,4 +365,3 @@ extends JPanel {
     }
   }
 }
-

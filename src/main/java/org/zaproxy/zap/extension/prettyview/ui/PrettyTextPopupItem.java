@@ -12,7 +12,6 @@ import java.io.IOException;
 import javax.swing.Action;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
@@ -139,12 +138,12 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
     switch (this.kind) {
       case UNDO:
         this.setText(PrettyTextPopupItem.canUndo(area) ? "Undo" : "Can't Undo");
-        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.UndoAction") != null
+        this.setEnabled(PrettyTextPopupItem.action(area, "pretty-undo") != null
             && PrettyTextPopupItem.canUndo(area));
         break;
       case REDO:
         this.setText(PrettyTextPopupItem.canRedo(area) ? "Redo" : "Can't Redo");
-        this.setEnabled(PrettyTextPopupItem.action(area, "RTA.RedoAction") != null
+        this.setEnabled(PrettyTextPopupItem.action(area, "pretty-redo") != null
             && PrettyTextPopupItem.canRedo(area));
         break;
       case CUT:
@@ -175,10 +174,10 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         selected == null ? -1 : selected.length());
     switch (this.kind) {
       case UNDO:
-        PrettyTextPopupItem.run(area, "RTA.UndoAction");
+        PrettyTextPopupItem.run(area, "pretty-undo");
         break;
       case REDO:
-        PrettyTextPopupItem.run(area, "RTA.RedoAction");
+        PrettyTextPopupItem.run(area, "pretty-redo");
         break;
       case CUT:
         // Done directly on the invoker instead of firing a clipboard action: looked-up actions
@@ -186,8 +185,7 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
         PrettyTextPopupItem.cutSelection(area);
         break;
       case COPY:
-        // Split-aware through the owning panel: Copy hands back the message's characters
-        // rather than the editor's inserted line breaks.
+        // The editor holds exactly the message characters, so the default copy is exact.
         panel.copySelection();
         break;
       case PASTE:
@@ -245,11 +243,11 @@ public final class PrettyTextPopupItem extends ExtensionPopupMenuItem {
   }
 
   private static boolean canUndo(JTextComponent area) {
-    return area instanceof RSyntaxTextArea && ((RSyntaxTextArea) area).canUndo();
+    return area instanceof PrettyTextPane && ((PrettyTextPane) area).undoHistory().canUndo();
   }
 
   private static boolean canRedo(JTextComponent area) {
-    return area instanceof RSyntaxTextArea && ((RSyntaxTextArea) area).canRedo();
+    return area instanceof PrettyTextPane && ((PrettyTextPane) area).undoHistory().canRedo();
   }
 
   private static void run(JTextComponent area, String... keys) {

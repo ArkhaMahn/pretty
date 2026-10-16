@@ -12,7 +12,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+
 import org.parosproxy.paros.extension.ExtensionPopupMenuItem;
 import org.zaproxy.zap.view.messagecontainer.MessageContainer;
 import org.zaproxy.zap.view.popup.ExtensionPopupMenuComponent;
@@ -29,7 +29,7 @@ public final class PrettyViewPopupItem extends ExtensionPopupMenuItem {
   /** Last so the View menu reads as the final section, below every core and text entry. */
   static final int PARENT_WEIGHT = 100;
 
-  private RSyntaxTextArea invoker;
+  private PrettyTextPane invoker;
 
   public PrettyViewPopupItem() {
     super("Line wrapping");
@@ -105,32 +105,44 @@ public final class PrettyViewPopupItem extends ExtensionPopupMenuItem {
    */
   private boolean capture(Component component) {
     this.invoker = null;
-    if (!(component instanceof RSyntaxTextArea)) {
+    if (!(component instanceof PrettyTextPane)) {
       return false;
     }
     if (SwingUtilities.getAncestorOfClass(PrettyViewPanel.class, component) == null) {
       return false;
     }
-    this.invoker = (RSyntaxTextArea) component;
+    this.invoker = (PrettyTextPane) component;
     return true;
   }
 
   /** Draws the check mark in the menu's own foreground, so it reads in both themes. */
   private void refreshCheck() {
-    RSyntaxTextArea area = this.invoker;
-    this.setIcon(new CheckIcon(area != null && area.getLineWrap()));
+    PrettyTextPane pane = this.invoker;
+    this.setIcon(new CheckIcon(pane != null && pane.isWrapped()));
   }
 
   private void onClick(ActionEvent event) {
-    RSyntaxTextArea area = this.invoker;
-    if (area == null) {
+    PrettyTextPane pane = this.invoker;
+    if (pane == null) {
       LOGGER.warn("PrettyView line-wrapping click with no captured editor");
       return;
     }
-    boolean wrap = !area.getLineWrap();
+    boolean wrap = !pane.isWrapped();
     PrettyLineWrap.setEnabled(wrap);
-    // Folding follows the wrap flag inside the area itself.
-    area.setLineWrap(wrap);
+    PrettyViewPanel panel = null;
+    java.awt.Container parent = pane.getParent();
+    while (parent != null) {
+      if (parent instanceof PrettyViewPanel) {
+        panel = (PrettyViewPanel) parent;
+        break;
+      }
+      parent = parent.getParent();
+    }
+    if (panel != null) {
+      panel.setWrapped(wrap);
+    } else {
+      pane.setWrapped(wrap);
+    }
     this.refreshCheck();
   }
 

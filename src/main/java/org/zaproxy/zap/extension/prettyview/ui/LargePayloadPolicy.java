@@ -1,67 +1,19 @@
 package org.zaproxy.zap.extension.prettyview.ui;
 
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
-import org.zaproxy.zap.extension.prettyview.detect.PayloadFormat;
-
 public final class LargePayloadPolicy {
   /**
-   * Formatted size past which highlighting is dropped. Ten megabytes covers what a 2.5 MB
-   * minified JSON payload unfolds into (~9 MB over ~380 k lines, measured live with stable
-   * paints); past that the token heap for millions of tokens is not worth the colours, and the
-   * view renders plain instead. Asked of the formatted text, whose expansion is what actually
-   * gets tokenized - not of the raw body.
-   */
-  public static final int SYNTAX_OFF_LIMIT_CHARS = 0xA00000;
-  /**
-   * Past this many display lines, wrapping switches off on its own. Wrapped scrolling walks
-   * every line on every move (the gutter maps each visible number through a walk from the top,
-   * and the wrapped layout re-measures along the way), so at 150 k lines a scroll step costs
-   * ~300 ms against a 16 ms frame, while unwrapped it costs a few milliseconds at any size.
-   * Burp's Pretty never wraps at all, which is what keeps it smooth; this keeps wrapping where
-   * it is cheap and drops it, with a notice, where it is not - unless the View toggle was
-   * explicitly used, which always wins.
+   * Past this many lines, wrapping switches off on its own. An untouched toggle is overruled
+   * for scroll performance - unless the View toggle was explicitly used, which always wins.
    */
   public static final int MAX_WRAP_LINES = 20000;
-  /**
-   * Past this longest line, syntax highlighting is dropped.
-   *
-   * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a repaint
-   * is set by the longest line rather than by the part of it on screen. A 118 871-char prettified JSON
-   * response holding one 54 332-char line repainted in 132 ms median against a 16 ms frame, which is what
-   * scrolling stuttering looks like.
-   *
-   * <p>In practice the displayed text is split before it gets here, so no line reaches this limit and a
-   * long payload keeps its highlighting. The limit stays as the guard for text that reaches the editor
-   * unsplit, which is why callers pass the text they are about to display rather than the formatted text.
-   */
-  public static final int MAX_SYNTAX_LINE_CHARS = 20000;
 
   private LargePayloadPolicy() {
-  }
-
-  public static int longestLineLength(String text) {
-    if (text == null) {
-      return 0;
-    }
-    int longest = 0;
-    int start = 0;
-    for (int i = 0; i < text.length(); ++i) {
-      char c = text.charAt(i);
-      if (c != '\n' && c != '\r') continue;
-      longest = Math.max(longest, i - start);
-      start = i + 1;
-    }
-    return Math.max(longest, text.length() - start);
   }
 
   /**
    * Whether the formatted text is wrapped: the toggle says yes by default, but past {@link
    * #MAX_WRAP_LINES} lines an untouched toggle is overruled for scroll performance. See {@link
    * PrettyLineWrap}.
-   *
-   * <p>Answered on the formatted text, before any breaks are added: the decision travels with
-   * the text into the split and the editor, and is never re-derived from break-inflated display
-   * text, which would flip wrapping off on the views that need it on.
    */
   public static boolean shouldWrap(String formattedText) {
     if (!PrettyLineWrap.isEnabled()) {
@@ -93,72 +45,4 @@ public final class LargePayloadPolicy {
     return lines;
   }
 
-  public static String syntaxStyleFor(String text, PayloadFormat format) {
-    if (text != null && text.length() > SYNTAX_OFF_LIMIT_CHARS) {
-      return "text/plain";
-    }
-    // While wrapped, over-long lines are laid out as soft rows from cached tokens instead of
-    // re-measured whole, so the guard stands down and the highlighting stays on.
-    if (LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
-      return "text/plain";
-    }
-    return SyntaxStyleMapper.syntaxStyleOf(format);
-  }
-
-  /**
-   * The style for a payload that is about to be displayed as {@code split}.
-   *
-   * <p>The two limits answer different questions and so are asked of different texts. The character limit
-   * is about the size of the payload, so it is asked of the formatted text: the displayed text is the same
-   * characters plus the seams {@link DisplayLineSplitter} added, and a payload sitting within a few
-   * hundred characters of the limit would cross it on seams alone and lose its highlighting for no reason.
-   * The line limit is about what the editor has to tokenize, so it is asked of the displayed text, which
-   * is the only text the editor ever holds.
-   */
-  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format) {
-    if (split.originalText().length() > SYNTAX_OFF_LIMIT_CHARS) {
-      return "text/plain";
-    }
-    if (LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
-      return "text/plain";
-    }
-    return SyntaxStyleMapper.syntaxStyleOf(format);
-  }
-
-  public static void applyBaseline(RSyntaxTextArea area) {
-    area.setTabsEmulated(true);
-    area.setTabSize(4);
-    area.setCodeFoldingEnabled(true);
-    area.setHighlightCurrentLine(false);
-    area.setMarkOccurrences(false);
-    area.setHyperlinksEnabled(false);
-    area.setClearWhitespaceLinesEnabled(false);
-    area.setHighlightSecondaryLanguages(false);
-    area.setUseFocusableTips(false);
-    // No bracket-matching animation: matches flash instead of fading, like everything else here.
-    area.setAnimateBracketMatching(false);
-    // Monospaced glyphs are not all the same width, so letting the editor measure them fractionally keeps
-    // the characters evenly spaced instead of snapping each one to a whole pixel. RSTA only turns this on
-    // by itself on some platforms; asking for it explicitly makes the text look the same everywhere.
-    area.setFractionalFontMetricsEnabled(true);
-  }
-
-  /**
-   * The editor settings for a payload: wrapping follows the View menu toggle (on by default),
-   * folding fills the gap when wrapping is off.
-   *
-   * <p>Lines wrap in the editor instead of scrolling sideways, and folding is disabled while
-   * they do: a fold gutter cannot share its lines with wrapped rows, so Burp drops folding the
-   * moment wrapping goes on, and this does the same. The wrap decision travelled here with the
-   * split it was made for and is applied as decided, never re-derived.
-   */
-  static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split, boolean wrap) {
-    // Folding follows the wrap flag inside the area itself; see PrettyTextArea.setLineWrap.
-    area.setLineWrap(wrap);
-    // Burp's wrapper asks its editor for the same preference: break wrapped rows on word
-    // boundaries rather than mid-word.
-    area.setWrapStyleWord(true);
-    area.setAntiAliasingEnabled(true);
-  }
 }
-

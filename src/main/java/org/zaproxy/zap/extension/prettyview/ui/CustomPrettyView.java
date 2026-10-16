@@ -7,7 +7,6 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.JComponent;
-import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
@@ -15,9 +14,6 @@ import javax.swing.event.DocumentListener;
 import javax.swing.text.BadLocationException;
 import java.awt.*;
 import org.apache.commons.configuration.FileConfiguration;
-import org.fife.ui.rsyntaxtextarea.RSyntaxDocument;
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
-import org.fife.ui.rsyntaxtextarea.TokenMakerFactory;
 import org.zaproxy.zap.extension.httppanel.Message;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelView;
 import org.zaproxy.zap.extension.httppanel.view.HttpPanelViewModel;
@@ -43,7 +39,7 @@ SearchableHttpPanelView {
   private final String captionName;
   private final boolean request;
   private final PrettyViewModel model;
-  private final RSyntaxTextArea textArea;
+  private final PrettyTextPane textPane;
   private final PrettyViewPanel panel;
   private final UniversalPrettifierManager prettifierManager;
   private final PrettyWorker worker;
@@ -59,7 +55,6 @@ SearchableHttpPanelView {
   /** The detected format of the loaded message; form posts rejoin pair lines on save. */
   private PayloadFormat format;
   private String lastFormatted = "";
-  private DisplayLineSplitter.Split split;
   /**
    * Length of the header region in formatted coordinates. The worker formats the same raw string
    * this is measured from, so the formatted headers are an exact prefix of it.
@@ -101,22 +96,16 @@ SearchableHttpPanelView {
     this.highlightTimer = new Timer(LIVE_HIGHLIGHT_DELAY_MS, event -> this.runHighlightCheck());
     this.highlightTimer.setRepeats(false);
     this.model = new PrettyViewModel(request, this.bodyOnly, this.headerOnly);
-    this.textArea = this.createTextArea();
-    this.panel = new PrettyViewPanel(this.textArea, this.model);
+    this.textPane = this.createTextPane();
+    this.panel = new PrettyViewPanel(this.textPane, this.model);
     this.model.addHttpPanelViewModelListener(this);
   }
 
-  private RSyntaxTextArea createTextArea() {
-    RSyntaxTextArea area = new PrettyTextArea();
-    if (area.getDocument() instanceof RSyntaxDocument) {
-      ((RSyntaxDocument) area.getDocument())
-          .setTokenMakerFactory(new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance()));
-    }
-    LargePayloadPolicy.applyBaseline(area);
-    area.setEditable(false);
-    area.setText("");
-    EditorTheme.apply(area, null, EditorTheme.palette());
-    return area;
+  private PrettyTextPane createTextPane() {
+    PrettyTextPane pane = new PrettyTextPane();
+    pane.setEditable(false);
+    pane.setText("");
+    return pane;
   }
 
   @Override
@@ -158,88 +147,84 @@ SearchableHttpPanelView {
       this.headerLength = 0;
       boolean wrap = LargePayloadPolicy.shouldWrap("");
       this.applyIfCurrent(ticket, PrettyResult.formatted("", null),
-          DisplayLineSplitter.split(""),
-          ChunkedTextLoader.buildDocument("", "text/plain", 0, () -> ticket == this.generation.get()),
+          StyledTextLoader.buildDocument("", PayloadFormat.PLAIN_TEXT, EditorTheme.palette(), 0,
+              () -> ticket == this.generation.get()),
           wrap);
     });
   }
 
   private void applyOnEdt(int ticket, PrettyResult result) {
-    // The wrap decision is made once on the formatted text and travels with it into the
-    // editor: never re-derived from break-inflated display text, which would flip wrapping off
-    // on the views that need it on.
+    // The wrap decision is made once on the formatted text: never re-derived later, which
+    // would flip wrapping off on the views that need it on.
     boolean wrap = LargePayloadPolicy.shouldWrap(result.getText());
+    EditorTheme.Palette palette = EditorTheme.palette();
+    int fromLine = Math.max(0, this.firstBodyLine(result.getText()) - 1);
     if (SwingUtilities.isEventDispatchThread()) {
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
-      this.applyIfCurrent(ticket, result, split,
-          ChunkedTextLoader.buildDocument(split.displayText(),
-              LargePayloadPolicy.syntaxStyleFor(split, result.getFormat()),
-              this.headerEndDisplay(split), () -> ticket == this.generation.get()),
+      this.applyIfCurrent(ticket, result,
+          StyledTextLoader.buildDocument(result.getText(), result.getFormat(), palette, fromLine,
+              () -> ticket == this.generation.get()),
           wrap);
     } else {
-      // Splitting a ~5 MB payload scans the whole text, and building the document tokenizes it;
-      // both run here on the worker thread so the EDT only installs the result. A stale ticket
-      // abandons the build at the next slice boundary, and applyIfCurrent drops whatever is left.
-      DisplayLineSplitter.Split split = DisplayLineSplitter.split(result.getText());
-      String style = LargePayloadPolicy.syntaxStyleFor(split, result.getFormat());
-      RSyntaxDocument document = ChunkedTextLoader.buildDocument(split.displayText(), style,
-          this.headerEndDisplay(split), () -> ticket == this.generation.get());
-      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, split, document, wrap));
+      // Building the document styles it, and styling a ~5 MB payload lexes for hundreds of
+      // milliseconds; both run here on the worker thread so the EDT only installs the result.
+      // A stale ticket abandons the build at the next slice boundary, and applyIfCurrent drops
+      // whatever is left.
+      javax.swing.text.DefaultStyledDocument document = StyledTextLoader.buildDocument(
+          result.getText(), result.getFormat(), palette, fromLine,
+          () -> ticket == this.generation.get());
+      SwingUtilities.invokeLater(() -> this.applyIfCurrent(ticket, result, document, wrap));
     }
   }
 
   /**
-   * Where the header region ends in display coordinates. Body-only views hold no headers, and
-   * header-only views hold nothing but, so the boundary is exact in both cases without
-   * special-casing: {@link #headerLength} is zero for the former and the whole text for the
-   * latter.
+   * First body line in formatted coordinates. Body-only views hold no headers, and header-only
+   * views hold nothing but, so the boundary is exact in both cases without special-casing:
+   * {@link #headerLength} is zero for the former and the whole text for the latter. Header
+   * lines keep the default colour; only the body highlights.
    */
-  private int headerEndDisplay(DisplayLineSplitter.Split split) {
-    return split.toDisplayOffset(this.headerLength);
+  private int firstBodyLine(String formatted) {
+    int lines = 1;
+    int end = Math.min(this.headerLength, formatted.length());
+    for (int i = 0; i < end; ++i) {
+      if (formatted.charAt(i) == '\n') {
+        ++lines;
+      }
+    }
+    return lines;
   }
 
   private void applyIfCurrent(
-      int ticket, PrettyResult result, DisplayLineSplitter.Split split, RSyntaxDocument document,
+      int ticket, PrettyResult result, javax.swing.text.DefaultStyledDocument document,
       boolean wrap) {
     if (ticket != this.generation.get() || document == null) {
       return;
     }
     this.format = result.getFormat();
-    // The notice answers the wrap decision, which was made on the formatted text: counting the
-    // display text instead would count the split's own breaks and cry unwrap on wrapped views.
     if (LargePayloadPolicy.wasAutoUnwrapped(result.getText())) {
       this.updateNotice(result, "Unwrapped "
           + LargePayloadPolicy.countLines(result.getText())
-          + " lines for smooth scrolling; Line wrapping in the View menu forces wrapping.");
+          + " lines; Line wrapping in the View menu forces wrapping.");
     } else {
       this.updateNotice(result);
     }
-    this.installSplit(ticket, split, document, wrap);
+    this.installContent(ticket, result, document, wrap);
   }
 
-  /** Installs a built document into the editor. The wrap decision travels with the split
-   * it was made for: re-deciding on the display text here would count the split's own breaks
-   * and flip wrapping off on the views that need it on. */
-  private void installSplit(
-      int ticket, DisplayLineSplitter.Split split, RSyntaxDocument document, boolean wrap) {
-    this.split = split;
-    LargePayloadPolicy.applyForSize(this.textArea, split, wrap);
-    // After the wrap flag above: the panel reads it back for per-payload scrolling.
-    this.panel.setSplit(split);
+  /** Installs a built document into the editor. */
+  private void installContent(
+      int ticket, PrettyResult result, javax.swing.text.DefaultStyledDocument document,
+      boolean wrap) {
+    this.panel.setWrapped(wrap);
     this.loading = true;
-    JTextArea body = this.panel.getTextArea();
+    PrettyTextPane body = this.panel.getTextPane();
     body.setEditable(false);
     this.panel.beginLoad();
-    ChunkedTextLoader.installDocument(body, document, this.panel::pinToTop, () -> {
+    StyledTextLoader.installDocument(body, document, result.getFormat(), EditorTheme.palette(),
+        this.panel::pinToTop, () -> {
       if (ticket != this.generation.get()) {
         return;
       }
-      // A fresh document carries the old undo history with it, and undoing would then wipe
-      // past the load itself; start the history here so only user edits are undoable.
-      if (body instanceof RSyntaxTextArea) {
-        ((RSyntaxTextArea) body).discardAllEdits();
-      }
-      this.lastFormatted = split.displayText();
+      this.lastFormatted = result.getText();
       this.loading = false;
       this.panel.setEditable(this.allowsEdits());
       this.panel.endLoad();
@@ -252,11 +237,8 @@ SearchableHttpPanelView {
    * document it is attached to, so replacing the document on the next load needs no cleanup;
    * stopping the timer covers the pause between loads.
    */
-  private void armLiveHighlight(JTextArea body) {
+  private void armLiveHighlight(PrettyTextPane body) {
     this.highlightTimer.stop();
-    if (!(body instanceof RSyntaxTextArea)) {
-      return;
-    }
     body.getDocument().addDocumentListener(new DocumentListener() {
       @Override
       public void insertUpdate(DocumentEvent event) {
@@ -283,21 +265,19 @@ SearchableHttpPanelView {
   }
 
   /**
-   * Follows what was typed with the matching syntax style, so highlighting stays live while
-   * editing: a body that becomes JSON starts colouring as JSON, and one that breaks falls back
-   * to plain. Only the style ever changes here - never the text, the caret or the undo history
-   * - which is what keeps typing stable. A load that landed meanwhile aborts the run.
+   * Follows what was typed with matching highlighting, so editing stays coloured while typing:
+   * a body that becomes JSON starts colouring as JSON, and one that breaks falls back to
+   * plain. Only attributes ever change here - never the text, the caret or the undo history -
+   * which is what keeps typing stable. The incremental filter already paints the edited lines;
+   * this refreshes the format when the body changes kind. A load that landed meanwhile aborts
+   * the run.
    */
   private void runHighlightCheck() {
     if (this.loading || !this.allowsEdits() || this.headerOnly) {
       return;
     }
     int ticket = this.generation.get();
-    JTextArea area = this.panel.getTextArea();
-    if (!(area instanceof RSyntaxTextArea)) {
-      return;
-    }
-    RSyntaxTextArea edit = (RSyntaxTextArea) area;
+    PrettyTextPane edit = this.panel.getTextPane();
     String display = edit.getText();
     String body;
     if (this.bodyOnly) {
@@ -310,15 +290,26 @@ SearchableHttpPanelView {
       body = parts.getBody();
     }
     PayloadFormat format = this.prettifierManager.detectFormat(this.model.getContentType(), body);
-    String style = LargePayloadPolicy.syntaxStyleFor(display, format);
     if (ticket != this.generation.get()) {
       return;
     }
-    if (style.equals(edit.getSyntaxEditingStyle())) {
+    if (format == this.format) {
       return;
     }
-    edit.setSyntaxEditingStyle(style);
     this.format = format;
+    javax.swing.text.Document document = edit.getDocument();
+    if (!(document instanceof javax.swing.text.DefaultStyledDocument)) {
+      return;
+    }
+    javax.swing.text.DefaultStyledDocument styled = (javax.swing.text.DefaultStyledDocument) document;
+    document.removeUndoableEditListener(edit.undoHistory());
+    try {
+      StyledHighlighter.styles(EditorTheme.palette()).highlight(styled, format, 0);
+    } catch (RuntimeException | BadLocationException e) {
+      // Never break typing for highlighting; the next pause repaints.
+    } finally {
+      document.addUndoableEditListener(edit.undoHistory());
+    }
   }
 
   private void updateNotice(PrettyResult result) {
@@ -394,7 +385,7 @@ SearchableHttpPanelView {
   @Override
   public void setSelected(boolean selected) {
     if (selected) {
-      this.panel.getTextArea().requestFocusInWindow();
+      this.panel.getTextPane().requestFocusInWindow();
     }
   }
 
@@ -405,7 +396,7 @@ SearchableHttpPanelView {
     if (this.loading) {
       return;
     }
-    String current = this.panel.getTextArea().getText();
+    String current = this.panel.getTextPane().getText();
     if (current.equals(this.lastFormatted)) {
       return;
     }
@@ -415,9 +406,8 @@ SearchableHttpPanelView {
     if (!this.isEditable()) {
       return;
     }
-    // Unwrap the display line breaks first (core's ContentSplitter does the same on the way in),
-    // then persist through the model like every core text view (see PrettyViewModel.setData).
-    String formatted = this.split == null ? current : this.split.toOriginal(current);
+    // What is shown is what gets sent: the editor holds exactly the message characters.
+    String formatted = current;
     if (this.format == PayloadFormat.FORM_URLENCODED && !this.headerOnly) {
       // Form pairs display one per line with '&' kept at each line end; rejoin them so the
       // wire body holds no newlines. Anything the user typed stays theirs, byte for byte.
@@ -450,30 +440,28 @@ SearchableHttpPanelView {
   /**
    * Contributes this view's hits to ZAP's global Search tab.
    *
-   * <p>The pattern runs over the current display text and each hit is mapped back through the
-   * split into formatted coordinates, then classified into the header region or the body region
-   * (offsets relative to the region start, as the core views report). Body offsets are relative
-   * to the <em>formatted</em> body, because pretty-printing is not invertible in general; they
-   * round-trip exactly through {@link #highlight(SearchMatch)} on this view.
+   * <p>The pattern runs over the current display text and each hit is classified into the
+   * header region or the body region (offsets relative to the region start, as the core views
+   * report). Body offsets are relative to the <em>formatted</em> body; they round-trip exactly
+   * through {@link #highlight(SearchMatch)} on this view.
    */
   @Override
   public void search(Pattern pattern, List<SearchMatch> matches) {
-    DisplayLineSplitter.Split split = this.split;
-    if (pattern == null || matches == null || split == null) {
+    if (pattern == null || matches == null) {
       return;
     }
-    String display = this.panel.getTextArea().getText();
+    String display = this.panel.getTextPane().getText();
     if (display.isEmpty()) {
       return;
     }
-    int formattedLength = split.originalText().length();
+    int formattedLength = display.length();
     int bodyStart = Math.min(this.headerLength + 2, formattedLength);
     Location head = this.request ? Location.REQUEST_HEAD : Location.RESPONSE_HEAD;
     Location body = this.request ? Location.REQUEST_BODY : Location.RESPONSE_BODY;
     Matcher matcher = pattern.matcher(display);
     while (matcher.find()) {
-      int start = split.toOriginalOffset(matcher.start());
-      int end = split.toOriginalOffset(matcher.end());
+      int start = matcher.start();
+      int end = matcher.end();
       if (start < 0) {
         start = 0;
       }
@@ -495,20 +483,17 @@ SearchableHttpPanelView {
 
   /**
    * Shows a global-search hit in the editor by selecting it and scrolling it into view.
-   *
-   * <p>Region-relative offsets are mapped back to display coordinates through the split, so hits
-   * reported by {@link #search(Pattern, List)} land exactly. Matches from other views are ignored.
+   * Matches from other views are ignored.
    */
   @Override
   public void highlight(SearchMatch match) {
-    DisplayLineSplitter.Split split = this.split;
-    if (match == null || split == null) {
+    if (match == null) {
       return;
     }
     Location location = match.getLocation();
     Location head = this.request ? Location.REQUEST_HEAD : Location.RESPONSE_HEAD;
     Location body = this.request ? Location.REQUEST_BODY : Location.RESPONSE_BODY;
-    int formattedLength = split.originalText().length();
+    int formattedLength = this.panel.getTextPane().getDocument().getLength();
     int formattedStart;
     int formattedEnd;
     if (location == head) {
@@ -524,17 +509,15 @@ SearchableHttpPanelView {
     if (formattedStart >= formattedEnd) {
       return;
     }
-    int displayStart = split.toDisplayOffset(formattedStart);
-    int displayEnd = split.toDisplayOffset(formattedEnd);
     CustomPrettyView.onEdt(() -> {
-      RSyntaxTextArea area = this.panel.getTextArea();
-      area.setCaretPosition(displayStart);
-      area.moveCaretPosition(displayEnd);
+      PrettyTextPane area = this.panel.getTextPane();
+      area.setCaretPosition(formattedStart);
+      area.moveCaretPosition(formattedEnd);
       try {
         // Null when the component has no laid-out view yet; the selection still stands.
-        java.awt.geom.Rectangle2D at = area.modelToView2D(displayEnd);
+        java.awt.Rectangle at = area.modelToView(formattedEnd);
         if (at != null) {
-          area.scrollRectToVisible(at.getBounds());
+          area.scrollRectToVisible(at);
         }
       } catch (BadLocationException e) {
         // The document changed under the highlight; the selection still stands.

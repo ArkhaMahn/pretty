@@ -3,7 +3,7 @@ package org.zaproxy.zap.extension.prettyview.ui;
 import java.awt.Color;
 import java.awt.Font;
 import javax.swing.JScrollPane;
-import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import javax.swing.JTextPane;
 import org.zaproxy.zap.utils.DisplayUtils;
 import org.zaproxy.zap.utils.FontUtils;
 import org.zaproxy.zap.utils.FontUtils.FontType;
@@ -16,7 +16,7 @@ final class EditorTheme {
   static final Palette LIGHT = new Palette("light", new Color(251, 251, 251), new Color(20, 20, 20), new Color(235, 241, 246), new Color(20, 20, 20), new Color(43, 43, 43),
       new Color(120, 120, 120), new Color(120, 120, 120), new Color(225, 224, 224), new Color(234, 234, 255), new Color(0, 0, 128),
       new Color(221, 221, 221), new Color(255, 255, 0));
-  static final Palette DARK = new Palette("dark", new Color(43, 43, 43), PrettySyntaxScheme.FOREGROUND, new Color(83, 132, 178), new Color(255, 255, 255), new Color(197, 199, 200),
+  static final Palette DARK = new Palette("dark", new Color(43, 43, 43), new Color(206, 206, 206), new Color(83, 132, 178), new Color(255, 255, 255), new Color(197, 199, 200),
       new Color(160, 160, 160), new Color(160, 160, 160), new Color(72, 76, 83), new Color(58, 61, 65), new Color(110, 110, 110),
       new Color(85, 85, 85), new Color(0, 16, 103));
   static final Color SEARCH_HIGHLIGHT = new Color(0, 122, 204);
@@ -60,49 +60,26 @@ final class EditorTheme {
     }
   }
 
-  static void apply(RSyntaxTextArea area, JScrollPane pane, Palette palette) {
-    area.setBackground(palette.getBackground());
-    area.setForeground(palette.getForeground());
-    area.setCaretColor(palette.getCaret());
-    area.setSelectedTextColor(palette.getForeground());
-    area.setSelectionColor(palette.getSelectionBackground());
-    area.setMarkOccurrencesColor(SEARCH_HIGHLIGHT);
-    area.setMarkAllHighlightColor(palette.getSearchMark());
-    area.setMatchedBracketBGColor(palette.getBracketBackground());
-    area.setMatchedBracketBorderColor(palette.getBracketBorder());
-    area.setCurrentLineHighlightColor(palette.getBackground());
+  static void apply(JTextPane pane, JScrollPane scroll, Palette palette) {
+    pane.setBackground(palette.getBackground());
+    pane.setForeground(palette.getForeground());
+    pane.setCaretColor(palette.getCaret());
+    pane.setSelectedTextColor(palette.getForeground());
+    pane.setSelectionColor(palette.getSelectionBackground());
     Font font = EditorTheme.configuredFont();
-    area.setFont(font);
-    PrettySyntaxScheme.apply(area, font, palette);
-    if (pane != null) {
-      pane.setViewportBorder(null);
-      pane.setBorder(null);
-      pane.getViewport().setBackground(palette.getBackground());
-      pane.setBackground(palette.getBackground());
-      if (pane instanceof org.fife.ui.rtextarea.RTextScrollPane) {
-        org.fife.ui.rtextarea.Gutter gutter =
-            ((org.fife.ui.rtextarea.RTextScrollPane) pane).getGutter();
-        if (gutter != null) {
-          gutter.setBackground(palette.getBackground());
-          gutter.setBorderColor(palette.getGutterBorder());
-          gutter.setLineNumberColor(palette.getLineNumber());
-          gutter.setLineNumberFont(font);
-          gutter.setCurrentLineNumberColor(palette.getForeground());
-          gutter.setFoldBackground(palette.getBackground());
-          gutter.setFoldIndicatorForeground(palette.getFoldIcon());
-          gutter.setFoldIndicatorArmedForeground(palette.getForeground());
-          gutter.setArmedFoldBackground(palette.getFoldArmedBackground());
-          // No collapsed-region previews on hover: the fold gutter shows the folds, never
-          // their hidden text.
-          for (java.awt.Component child : gutter.getComponents()) {
-            if (child instanceof org.fife.ui.rtextarea.FoldIndicator) {
-              ((org.fife.ui.rtextarea.FoldIndicator) child).setShowCollapsedRegionToolTips(false);
-            }
-          }
-        }
+    pane.setFont(font);
+    if (scroll != null) {
+      scroll.setViewportBorder(null);
+      scroll.setBorder(null);
+      scroll.getViewport().setBackground(palette.getBackground());
+      scroll.setBackground(palette.getBackground());
+      if (scroll.getRowHeader() != null
+          && scroll.getRowHeader().getView() instanceof LineNumberGutter) {
+        ((LineNumberGutter) scroll.getRowHeader().getView())
+            .applyTheme(font, palette.getLineNumber(), palette.getBackground());
       }
     }
-    area.repaint();
+    pane.repaint();
   }
 
   static final class Palette {
