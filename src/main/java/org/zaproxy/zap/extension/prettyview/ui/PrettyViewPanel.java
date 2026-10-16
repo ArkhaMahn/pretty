@@ -8,6 +8,8 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.awt.event.ContainerAdapter;
+import java.awt.event.ContainerEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
@@ -28,6 +30,7 @@ import javax.swing.Timer;
 
 import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.fife.ui.rtextarea.FoldIndicator;
 import org.fife.ui.rtextarea.RTextScrollPane;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -81,6 +84,17 @@ extends JPanel {
     });
     this.scrollPane = new RTextScrollPane(textArea);
     this.scrollPane.setFoldIndicatorEnabled(true);
+    // Fold indicators come and go with the folding flag (unwrapping re-adds a fresh one), and
+    // every fresh one previews collapsed text on hover by default. The listener keeps previews
+    // off whichever indicator is current; EditorTheme.apply covers the one present at theme time.
+    this.scrollPane.getGutter().addContainerListener(new ContainerAdapter() {
+      @Override
+      public void componentAdded(ContainerEvent event) {
+        if (event.getChild() instanceof FoldIndicator) {
+          ((FoldIndicator) event.getChild()).setShowCollapsedRegionToolTips(false);
+        }
+      }
+    });
     this.noticeBar = new PrettyNoticeBar();
     this.searchBar = new PrettySearchBar(textArea);
     EditorTheme.apply(textArea, this.scrollPane, EditorTheme.palette());
