@@ -13,6 +13,16 @@ public final class LargePayloadPolicy {
    */
   public static final int SYNTAX_OFF_LIMIT_CHARS = 0xA00000;
   /**
+   * Past this many display lines, wrapping switches off on its own. Wrapped scrolling walks
+   * every line on every move (the gutter maps each visible number through a walk from the top,
+   * and the wrapped layout re-measures along the way), so at 150 k lines a scroll step costs
+   * ~300 ms against a 16 ms frame, while unwrapped it costs a few milliseconds at any size.
+   * Burp's Pretty never wraps at all, which is what keeps it smooth; this keeps wrapping where
+   * it is cheap and drops it, with a notice, where it is not - unless the View toggle was
+   * explicitly used, which always wins.
+   */
+  public static final int MAX_WRAP_LINES = 20000;
+  /**
    * Past this longest line, syntax highlighting is dropped.
    *
    * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a repaint
@@ -42,6 +52,41 @@ public final class LargePayloadPolicy {
       start = i + 1;
     }
     return Math.max(longest, text.length() - start);
+  }
+
+  /**
+   * Whether the display text is wrapped: the toggle says yes by default, but past {@link
+   * #MAX_WRAP_LINES} lines an untouched toggle is overruled for scroll performance. See {@link
+   * PrettyLineWrap}.
+   */
+  public static boolean shouldWrap(String displayText) {
+    if (!PrettyLineWrap.isEnabled()) {
+      return false;
+    }
+    return PrettyLineWrap.isTouched() || LargePayloadPolicy.countLines(displayText) <= MAX_WRAP_LINES;
+  }
+
+  /**
+   * Whether the display text was unwrapped by the line limit rather than by choice, for the
+   * notice that says so.
+   */
+  public static boolean wasAutoUnwrapped(String displayText) {
+    return PrettyLineWrap.isEnabled()
+        && !PrettyLineWrap.isTouched()
+        && LargePayloadPolicy.countLines(displayText) > MAX_WRAP_LINES;
+  }
+
+  static int countLines(String text) {
+    if (text == null || text.isEmpty()) {
+      return 0;
+    }
+    int lines = 1;
+    for (int i = 0; i < text.length(); ++i) {
+      if (text.charAt(i) == '\n') {
+        ++lines;
+      }
+    }
+    return lines;
   }
 
   public static String syntaxStyleFor(String text, PayloadFormat format) {
@@ -102,7 +147,7 @@ public final class LargePayloadPolicy {
    */
   public static void applyForSize(RSyntaxTextArea area, String text) {
     // Folding follows the wrap flag inside the area itself; see PrettyTextArea.setLineWrap.
-    area.setLineWrap(PrettyLineWrap.isEnabled());
+    area.setLineWrap(LargePayloadPolicy.shouldWrap(text));
     // Burp's wrapper asks its editor for the same preference: break wrapped rows on word
     // boundaries rather than mid-word.
     area.setWrapStyleWord(true);
@@ -116,7 +161,7 @@ public final class LargePayloadPolicy {
    * lines, so the wrap setting is judged on text the editor can lay out either way.
    */
   static void applyForSize(RSyntaxTextArea area, DisplayLineSplitter.Split split) {
-    area.setLineWrap(PrettyLineWrap.isEnabled());
+    area.setLineWrap(LargePayloadPolicy.shouldWrap(split.displayText()));
     area.setWrapStyleWord(true);
     area.setAntiAliasingEnabled(true);
   }

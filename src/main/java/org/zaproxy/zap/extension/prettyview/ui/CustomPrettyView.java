@@ -197,7 +197,13 @@ SearchableHttpPanelView {
       return;
     }
     this.format = result.getFormat();
-    this.updateNotice(result);
+    if (LargePayloadPolicy.wasAutoUnwrapped(split.displayText())) {
+      this.updateNotice(result, "Unwrapped "
+          + LargePayloadPolicy.countLines(split.displayText())
+          + " lines for smooth scrolling; Line wrapping in the View menu forces wrapping.");
+    } else {
+      this.updateNotice(result);
+    }
     this.installSplit(ticket, split, document);
   }
 
