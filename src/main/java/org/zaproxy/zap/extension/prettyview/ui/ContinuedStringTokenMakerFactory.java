@@ -34,6 +34,10 @@ final class ContinuedStringTokenMakerFactory extends TokenMakerFactory {
       // No stock tokenizer colours event streams; the delegate would answer null and the editor
       // would fall back to plain text.
       maker = new SseTokenMaker();
+    } else if ("text/form".equals(key)) {
+      // No stock tokenizer knows '&' separators; the properties tokenizer reads only the first
+      // pair and swallows the rest into one value token.
+      maker = new FormTokenMaker();
     } else if ("text/json".equals(key)) {
       maker = this.delegate.getTokenMaker(key);
       if (maker == null) {
@@ -44,6 +48,12 @@ final class ContinuedStringTokenMakerFactory extends TokenMakerFactory {
       // Burp's CSS token boundaries (class and id selectors, hex colours, at-rules) do not line
       // up with the stock maker's, so the language gets its own tokenizer rather than a retype.
       maker = new ContinuedStringTokenMaker(new CssTokenMaker());
+    } else if ("text/csv".equals(key)) {
+      maker = this.delegate.getTokenMaker(key);
+      if (maker == null) {
+        return null;
+      }
+      maker = new CsvUniformTokenMaker(new ContinuedStringTokenMaker(maker));
     } else if ("text/javascript".equals(key)) {
       maker = this.delegate.getTokenMaker(key);
       if (maker == null) {
@@ -64,6 +74,7 @@ final class ContinuedStringTokenMakerFactory extends TokenMakerFactory {
   public Set<String> keySet() {
     Set<String> keys = new java.util.HashSet<>(this.delegate.keySet());
     keys.add("text/sse");
+    keys.add("text/form");
     return keys;
   }
 }

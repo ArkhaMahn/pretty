@@ -30,7 +30,7 @@ public final class SyntaxStyleMapper {
         return "text/javascript";
       }
       case FORM_URLENCODED: {
-        return "text/properties";
+        return "text/form";
       }
       case SQL: {
         return "text/sql";
