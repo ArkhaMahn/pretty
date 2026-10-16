@@ -172,6 +172,9 @@ extends ExtensionAdaptor {
     if (this.responseSplitHeaderFactory != null) {
       this.responseSplitHeaderFactory.disposeAll();
     }
+    // Views are gone and every task is cancelled, so the shared worker threads can stop: none
+    // may outlive the add-on or they pin its classes loaded.
+    org.zaproxy.zap.extension.prettyview.async.PrettyWorkerPool.shutdown();
     HttpPanelManager manager = HttpPanelManager.getInstance();
     // Each removal runs even if an earlier one throws, so one failure cannot leave ZAP
     // half-unloaded; failures are logged and unloading continues.

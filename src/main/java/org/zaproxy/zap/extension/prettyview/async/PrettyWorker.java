@@ -1,10 +1,6 @@
 package org.zaproxy.zap.extension.prettyview.async;
 
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -12,17 +8,9 @@ import org.zaproxy.zap.extension.prettyview.formatters.PrettyResult;
 import org.zaproxy.zap.extension.prettyview.formatters.UniversalPrettifierManager;
 
 public final class PrettyWorker {
-  private static final ThreadFactory THREAD_FACTORY = runnable -> {
-    Thread thread = new Thread(runnable, "ZAP-PrettyView-worker");
-    thread.setDaemon(true);
-    thread.setPriority(4);
-    return thread;
-  };
-  private final ExecutorHolder holder;
   private final AtomicReference<PrettyWorkerTask> current = new AtomicReference();
 
   public PrettyWorker() {
-    this.holder = new ExecutorHolder();
   }
 
   public void submit(String message, String contentType, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
@@ -37,6 +25,10 @@ public final class PrettyWorker {
    * <p>When {@code prettify} is false the text goes through verbatim and only its format is
    * detected, for views where the user writes: what is shown - and saved, and sent - stays
    * byte-for-byte theirs, with highlighting only.
+   *
+   * <p>Ordering stays per view on the shared pool: the previous task is cancelled and pulled
+   * out of the queue before the next is submitted, so a view never has two live tasks and a
+   * newer message always wins.
    */
   public void submit(String message, String contentType, boolean bodyOnly, UniversalPrettifierManager prettifierManager, Consumer<PrettyResult> onResult) {
     this.submit(message, contentType, bodyOnly, true, prettifierManager, onResult);
@@ -52,20 +44,17 @@ public final class PrettyWorker {
           ? () -> prettifierManager.prettifyBodyMessage(message, contentType)
           : () -> prettifierManager.prettifyMessage(message, contentType);
     }
-    block3: {
-      PrettyWorkerTask task = new PrettyWorkerTask(message, formatting, onResult);
-      PrettyWorkerTask previous = this.current.getAndSet(task);
-      if (previous != null) {
-        previous.cancel();
-      }
-      try {
-        this.holder.executor.execute(task);
-      }
-      catch (RejectedExecutionException e) {
-        if (this.onRejected(task)) break block3;
-        task.cancel();
-        return;
-      }
+    PrettyWorkerTask task = new PrettyWorkerTask(message, formatting, onResult);
+    PrettyWorkerTask previous = this.current.getAndSet(task);
+    if (previous != null) {
+      previous.cancel();
+      PrettyWorkerPool.removeQueued(previous);
+    }
+    try {
+      PrettyWorkerPool.execute(task);
+    } catch (RejectedExecutionException e) {
+      // The shared queue is unbounded, so this only fires past shutdown; drop the task.
+      task.cancel();
     }
   }
 
@@ -76,47 +65,19 @@ public final class PrettyWorker {
     return org.zaproxy.zap.extension.prettyview.detect.MessageSplitter.split(message).getBody();
   }
 
-  private boolean onRejected(PrettyWorkerTask task) {
-    PrettyWorkerTask queued = this.holder.clearQueued();
-    if (queued != null) {
-      queued.cancel();
-    }
-    try {
-      this.holder.executor.execute(task);
-      return true;
-    }
-    catch (RejectedExecutionException retryFailed) {
-      return false;
-    }
-  }
-
   public void cancelPending() {
     PrettyWorkerTask task = this.current.getAndSet(null);
     if (task != null) {
       task.cancel();
-    }
-    PrettyWorkerTask queued = this.holder.clearQueued();
-    if (queued != null) {
-      queued.cancel();
+      PrettyWorkerPool.removeQueued(task);
     }
   }
 
+  /**
+   * Releases this view's work. The pool itself is shared and stops only on add-on unload (see
+   * {@link PrettyWorkerPool#shutdown()}), never here.
+   */
   public void shutdown() {
     this.cancelPending();
-    this.holder.executor.shutdownNow();
-  }
-
-  private static final class ExecutorHolder {
-    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 30L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1), THREAD_FACTORY, new ThreadPoolExecutor.AbortPolicy());
-
-    private ExecutorHolder() {
-      this.executor.allowCoreThreadTimeOut(true);
-    }
-
-    private PrettyWorkerTask clearQueued() {
-      Runnable queued = (Runnable)this.executor.getQueue().poll();
-      return queued instanceof PrettyWorkerTask ? (PrettyWorkerTask)queued : null;
-    }
   }
 }
-
