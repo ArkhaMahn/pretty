@@ -332,6 +332,10 @@ extends JPanel {
    */
   public void setSplit(DisplayLineSplitter.Split split) {
     this.split = split;
+    // Animated scrolling multiplies paint cost per frame, so only documents that paint near
+    // a frame glide; heavier ones move in discrete notches (see LargePayloadPolicy).
+    this.scrollPane.putClientProperty("JScrollPane.smoothScrolling",
+        LargePayloadPolicy.smoothScrolling(split, this.textArea.getLineWrap()));
     if (this.copyAction != null) {
       return;
     }

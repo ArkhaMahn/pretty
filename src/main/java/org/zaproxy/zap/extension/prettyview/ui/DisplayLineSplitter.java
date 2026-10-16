@@ -10,14 +10,15 @@ import java.util.List;
  * <p>Short lines reach the editor untouched, so what is shown is the formatted text byte for byte
  * and code folding sees the real structure. Only a line past {@link #SPLIT_LINE_CHARS} is broken,
  * into {@link #CHUNK_CHARS} pieces, because two costs scale with the longest line rather than with
- * what is on screen: the editor re-tokenizes the whole logical line a painted row belongs to (past
- * {@link LargePayloadPolicy#MAX_SYNTAX_LINE_CHARS} the whole document would lose its highlighting),
+ * what is on screen: the editor re-lays its wrapped rows on every paint, walking every token of
+ * every long line measuring glyphs (seconds per scroll step on a real page past ~8 k characters),
  * and an unwrapped row tens of thousands of characters wide asks for a preferred width of hundreds
  * of thousands of pixels and paints only part of itself.
  *
  * <p>Every {@link Split} keeps enough information to undo the breaks: copying a selection hands
  * back the characters as they were in the response, and writing an edited body back to the message
- * does the same.
+ * does the same. Continuation pieces replay the broken line's indentation, so nothing flows
+ * outside its level.
  *
  * <p>A break is never put where it would cut a string literal in half if one is in reach. The mapping
  * that undoes the break is indifferent to what the characters were, but the editor is not: the second
@@ -29,11 +30,18 @@ final class DisplayLineSplitter {
   /**
    * Only lines past this length are broken. Sits well below the syntax line limit, so a displayed
    * line never costs the document its highlighting, and far below the width where an unwrapped row
-   * stops painting fully - while leaving ordinary lines, which folding needs whole, alone.
+   * stops painting fully - while leaving ordinary lines, which folding needs whole, alone. Past
+   * this length a wrapped line also re-lays whole seconds per paint, so wrapped views split here
+   * too: only the pathological few lines gain numbers, each replaying the broken line's
+   * indentation.
    */
   static final int SPLIT_LINE_CHARS = 8000;
 
-  /** Longest line handed to the editor, chosen from measurements rather than guessed. */
+  /**
+   * Longest piece a broken line is cut into. Short enough that laying a piece out costs a frame
+   * at most: the editor re-lays every line on every paint, so pieces past this make every
+   * scroll step wait on the pathological few lines.
+   */
   static final int CHUNK_CHARS = 2000;
 
   /**
@@ -58,22 +66,11 @@ final class DisplayLineSplitter {
   }
 
   /**
-   * Breaks the text for the editor, or hands it over untouched when it will be wrapped.
-   *
-   * <p>A wrapped editor lays its own rows at the view width without numbering them, so breaking
-   * here would number what wrapping must not: an over-long line counts as the single line it
-   * is. Only an unwrapped editor is given breaks, because a row tens of thousands of characters
-   * wide asks for a preferred width of hundreds of thousands of pixels and paints only part of
-   * itself.
+   * Breaks only monster lines before they reach the editor. Short lines reach it untouched, so
+   * what is shown is the formatted text byte for byte and code folding sees the real structure;
+   * only the pathological few lines are cut, each continuation replaying the broken line's
+   * indentation so nothing flows outside its level.
    */
-  static Split split(String text, boolean wrap) {
-    if (wrap) {
-      String whole = text == null ? "" : text;
-      return new Split(whole, whole, new int[0], new int[0]);
-    }
-    return DisplayLineSplitter.split(text);
-  }
-
   static Split split(String text) {
     if (text == null || text.isEmpty()) {
       return new Split(text == null ? "" : text, text == null ? "" : text, new int[0], new int[0]);

@@ -39,7 +39,7 @@ final class ChunkedTextLoader {
     ContinuedStringTokenMakerFactory factory =
         new ContinuedStringTokenMakerFactory(TokenMakerFactory.getDefaultInstance());
     factory.setHeaderEnd(headerEnd);
-    RSyntaxDocument document = new RSyntaxDocument(factory, style);
+    RSyntaxDocument document = new CachingRSyntaxDocument(factory, style);
     try {
       for (int offset = 0; offset < content.length(); offset += SLICE_CHARS) {
         if (!stillWanted.getAsBoolean()) {

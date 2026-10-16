@@ -23,6 +23,30 @@ public final class LargePayloadPolicy {
    */
   public static final int MAX_WRAP_LINES = 20000;
   /**
+   * Past this many display lines, or past {@link #SMOOTH_CHARS} display characters, FlatLaf's
+   * smooth scrolling stays off and the wheel moves in discrete notches. The animation repaints
+   * every intermediate frame, and a wrapped paint walks every token of every line, so past a
+   * small document one gesture becomes seconds of frames against a 16 ms budget. Small
+   * documents keep the glide; everything else moves notch by notch.
+   */
+  static final int SMOOTH_LINES = 2000;
+  /** Display characters past which smooth scrolling stays off, for the same reason. */
+  static final int SMOOTH_CHARS = 100000;
+
+  /**
+   * Whether animated smooth scrolling pays off for this payload. Unwrapped views paint a frame
+   * at any size, so they always glide; wrapped views animate only small documents, where a
+   * paint stays near a frame.
+   */
+  static boolean smoothScrolling(DisplayLineSplitter.Split split, boolean wrap) {
+    if (!wrap) {
+      return true;
+    }
+    return LargePayloadPolicy.countLines(split.displayText()) <= SMOOTH_LINES
+        && split.displayText().length() <= SMOOTH_CHARS;
+  }
+
+  /**
    * Past this longest line, syntax highlighting is dropped.
    *
    * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a repaint
@@ -93,11 +117,11 @@ public final class LargePayloadPolicy {
     return lines;
   }
 
-  public static String syntaxStyleFor(String text, PayloadFormat format, boolean wrap) {
+  public static String syntaxStyleFor(String text, PayloadFormat format) {
     if (text != null && text.length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (!wrap && LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
+    if (LargePayloadPolicy.longestLineLength(text) > LargePayloadPolicy.MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
@@ -111,15 +135,13 @@ public final class LargePayloadPolicy {
    * characters plus the seams {@link DisplayLineSplitter} added, and a payload sitting within a few
    * hundred characters of the limit would cross it on seams alone and lose its highlighting for no reason.
    * The line limit is about what the editor has to tokenize, so it is asked of the displayed text, which
-   * is the only text the editor ever holds - except while wrapped, when over-long lines are laid out as
-   * soft rows from cached tokens instead of re-measured whole, so the guard stands down and the
-   * highlighting stays on.
+   * is the only text the editor ever holds.
    */
-  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format, boolean wrap) {
+  static String syntaxStyleFor(DisplayLineSplitter.Split split, PayloadFormat format) {
     if (split.originalText().length() > SYNTAX_OFF_LIMIT_CHARS) {
       return "text/plain";
     }
-    if (!wrap && LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
+    if (LargePayloadPolicy.longestLineLength(split.displayText()) > MAX_SYNTAX_LINE_CHARS) {
       return "text/plain";
     }
     return SyntaxStyleMapper.syntaxStyleOf(format);
