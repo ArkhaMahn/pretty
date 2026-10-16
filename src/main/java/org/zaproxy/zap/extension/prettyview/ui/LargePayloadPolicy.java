@@ -23,30 +23,6 @@ public final class LargePayloadPolicy {
    */
   public static final int MAX_WRAP_LINES = 20000;
   /**
-   * Past this many display lines, or past {@link #SMOOTH_CHARS} display characters, FlatLaf's
-   * smooth scrolling stays off and the wheel moves in discrete notches. The animation repaints
-   * every intermediate frame, and a wrapped paint walks every token of every line, so past a
-   * small document one gesture becomes seconds of frames against a 16 ms budget. Small
-   * documents keep the glide; everything else moves notch by notch.
-   */
-  static final int SMOOTH_LINES = 2000;
-  /** Display characters past which smooth scrolling stays off, for the same reason. */
-  static final int SMOOTH_CHARS = 100000;
-
-  /**
-   * Whether animated smooth scrolling pays off for this payload. Unwrapped views paint a frame
-   * at any size, so they always glide; wrapped views animate only small documents, where a
-   * paint stays near a frame.
-   */
-  static boolean smoothScrolling(DisplayLineSplitter.Split split, boolean wrap) {
-    if (!wrap) {
-      return true;
-    }
-    return LargePayloadPolicy.countLines(split.displayText()) <= SMOOTH_LINES
-        && split.displayText().length() <= SMOOTH_CHARS;
-  }
-
-  /**
    * Past this longest line, syntax highlighting is dropped.
    *
    * <p>The editor re-tokenizes the whole logical line a painted row belongs to, so the cost of a repaint
@@ -157,6 +133,8 @@ public final class LargePayloadPolicy {
     area.setClearWhitespaceLinesEnabled(false);
     area.setHighlightSecondaryLanguages(false);
     area.setUseFocusableTips(false);
+    // No bracket-matching animation: matches flash instead of fading, like everything else here.
+    area.setAnimateBracketMatching(false);
     // Monospaced glyphs are not all the same width, so letting the editor measure them fractionally keeps
     // the characters evenly spaced instead of snapping each one to a whole pixel. RSTA only turns this on
     // by itself on some platforms; asking for it explicitly makes the text look the same everywhere.

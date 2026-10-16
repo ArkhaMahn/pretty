@@ -26,7 +26,6 @@ import javax.swing.JScrollBar;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
-import javax.swing.Timer;
 
 import javax.swing.text.JTextComponent;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
@@ -46,12 +45,11 @@ public final class PrettyViewPanel
 extends JPanel {
   private static final Logger LOGGER = LogManager.getLogger(PrettyViewPanel.class);
   private static final long serialVersionUID = 1L;
-  private static final int TICK_MILLIS = 150;  private static final String COPY_KEY = "copy";
+  private static final String COPY_KEY = "copy";
   private final RSyntaxTextArea textArea;
   private final RTextScrollPane scrollPane;
   private final PrettyNoticeBar noticeBar;
   private final PrettySearchBar searchBar;
-  private final Timer tickTimer;
   /** True while a payload is streaming in, which is when the view is held at the top of the document. */
   private boolean loading;
   /** Set once the user scrolls or clicks during a load, after which the view is left entirely alone. */
@@ -103,8 +101,6 @@ extends JPanel {
     header.add((Component)this.searchBar, "South");
     this.add((Component)header, "North");
     this.add((Component)this.scrollPane, "Center");
-    this.tickTimer = new Timer(TICK_MILLIS, event -> this.noticeBar.advanceSpinner());
-    this.tickTimer.setRepeats(true);
     JScrollBar vertical = this.scrollPane.getVerticalScrollBar();
     if (vertical != null) {
       vertical.addMouseListener(new MouseAdapter() {
@@ -171,16 +167,16 @@ extends JPanel {
   }
 
   /**
-   * Makes the wheel move the view in small steps rather than whole lines at a time.
+   * Makes the wheel move the view in small discrete steps rather than whole lines at a time.
    *
    * <p>Swing's default unit increment comes from the view, and on a text area that can be a few
    * pixels, which reads as scrolling that barely moves however hard the wheel is turned - while
-   * a whole line per notch jumps even under FlatLaf's smooth scrolling, which is also asked for
-   * here when ZAP runs its own look and feel. A third of a row glides instead, at the same paint
-   * cost per notch either way.
+   * a whole line per notch jumps. A third of a row steps instead, at the same paint cost per
+   * notch either way. No animation: every notch lands in a single paint each, and FlatLaf's
+   * global smooth scrolling (on by default) is switched off for this pane.
    */
   private void installScrolling() {
-    this.scrollPane.putClientProperty("JScrollPane.smoothScrolling", Boolean.TRUE);
+    this.scrollPane.putClientProperty("JScrollPane.smoothScrolling", Boolean.FALSE);
     this.applyScrollUnit();
     this.scrollPane.getViewport().addComponentListener(new ComponentAdapter() {
       @Override
@@ -332,10 +328,6 @@ extends JPanel {
    */
   public void setSplit(DisplayLineSplitter.Split split) {
     this.split = split;
-    // Animated scrolling multiplies paint cost per frame, so only documents that paint near
-    // a frame glide; heavier ones move in discrete notches (see LargePayloadPolicy).
-    this.scrollPane.putClientProperty("JScrollPane.smoothScrolling",
-        LargePayloadPolicy.smoothScrolling(split, this.textArea.getLineWrap()));
     if (this.copyAction != null) {
       return;
     }
@@ -455,51 +447,23 @@ extends JPanel {
   }
 
   public void showLoading(String sizeHint) {
-    PrettyViewPanel.onEdt(() -> {
-      this.startTicking();
-      this.noticeBar.showLoading(sizeHint);
-    });
+    PrettyViewPanel.onEdt(() -> this.noticeBar.showLoading(sizeHint));
   }
 
   public void showThresholdNotice(String detail) {
-    PrettyViewPanel.onEdt(() -> {
-      this.stopTicking();
-      this.noticeBar.showThresholdNotice(detail);
-    });
+    PrettyViewPanel.onEdt(() -> this.noticeBar.showThresholdNotice(detail));
   }
 
   public void showFallbackNotice(String detail) {
-    PrettyViewPanel.onEdt(() -> {
-      this.stopTicking();
-      this.noticeBar.showFallbackNotice(detail);
-    });
+    PrettyViewPanel.onEdt(() -> this.noticeBar.showFallbackNotice(detail));
   }
 
   public void clearNotice() {
-    PrettyViewPanel.onEdt(() -> {
-      this.stopTicking();
-      this.noticeBar.clear();
-    });
+    PrettyViewPanel.onEdt(() -> this.noticeBar.clear());
   }
 
-  private void startTicking() {
-    if (!this.tickTimer.isRunning()) {
-      this.tickTimer.start();
-    }
-  }
-
-  private void stopTicking() {
-    if (this.tickTimer.isRunning()) {
-      this.tickTimer.stop();
-    }
-  }
-
-  /**
-   * Releases panel resources. Stops the spinner so a detached panel no longer fires every
-   * 150 ms after its view has been unloaded.
-   */
+  /** Releases this view's resources. Nothing ticks anymore; kept so unload has a hook. */
   public void dispose() {
-    this.stopTicking();
   }
 
   private static void onEdt(Runnable task) {

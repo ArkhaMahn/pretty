@@ -4,7 +4,6 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.Font;
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -13,12 +12,7 @@ public final class PrettyNoticeBar
 extends JPanel {
   private static final long serialVersionUID = 1L;
   private static final int BAR_HEIGHT = 22;
-  private static final int SPINNER_WIDTH = 14;
-  private static final String[] SPINNER_FRAMES = new String[]{"-", "\\", "|", "/"};
   private final JLabel label;
-  private final JPanel spinnerSlot;
-  private final JLabel spinnerLabel;
-  private int spinnerIndex;
 
   public PrettyNoticeBar() {
     super(new BorderLayout());
@@ -26,17 +20,6 @@ extends JPanel {
     this.label = new JLabel(" ", 10);
     this.label.setFont(this.label.getFont().deriveFont(0, 11.0f));
     this.add((Component)this.label, "Center");
-    this.spinnerLabel = new JLabel(" ", 0);
-    this.spinnerLabel.setFont(new Font("Monospaced", 0, 11));
-    this.spinnerLabel.setVisible(false);
-    this.spinnerLabel.setPreferredSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
-    this.spinnerLabel.setMinimumSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
-    this.spinnerLabel.setMaximumSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
-    this.spinnerSlot = new JPanel(new BorderLayout());
-    this.spinnerSlot.setOpaque(false);
-    this.spinnerSlot.setPreferredSize(new Dimension(SPINNER_WIDTH, BAR_HEIGHT));
-    this.spinnerSlot.add((Component)this.spinnerLabel, "Center");
-    this.add((Component)this.spinnerSlot, "Before");
     this.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
     this.setPreferredSize(new Dimension(100, BAR_HEIGHT));
     this.setMinimumSize(new Dimension(100, BAR_HEIGHT));
@@ -46,43 +29,20 @@ extends JPanel {
   public void showLoading(String detail) {
     this.setMessage("Formatting" + (String)(detail == null || detail.isEmpty() ? "" : " " + detail) + "...");
     this.label.setForeground(new Color(136, 136, 136));
-    this.spinnerLabel.setVisible(true);
-    this.setSpinnerFrame(0);
-  }
-
-  public void advanceSpinner() {
-    if (!this.spinnerLabel.isVisible()) {
-      return;
-    }
-    int next = (this.spinnerIndex + 1) % SPINNER_FRAMES.length;
-    this.setSpinnerFrame(next);
-  }
-
-  private void setSpinnerFrame(int index) {
-    this.spinnerIndex = index;
-    this.spinnerLabel.setText(SPINNER_FRAMES[index]);
   }
 
   public void showThresholdNotice(String detail) {
-    this.stopSpinner();
     this.setMessage(detail);
     this.label.setForeground(new Color(178, 122, 0));
   }
 
   public void showFallbackNotice(String detail) {
-    this.stopSpinner();
     this.setMessage(detail);
     this.label.setForeground(new Color(178, 122, 0));
   }
 
   public void clear() {
-    this.stopSpinner();
     this.setMessage("");
-  }
-
-  private void stopSpinner() {
-    this.spinnerLabel.setVisible(false);
-    this.spinnerLabel.setText(" ");
   }
 
   private void setMessage(String message) {
